@@ -1,0 +1,7 @@
+# ignore ALL .log files
+*.log
+
+*.o
+*.mod
+*.exe
+

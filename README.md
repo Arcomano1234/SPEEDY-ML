@@ -1,1 +1,3 @@
 # SPEEDY-ML
+
+Fortran code for a hybrid model that combines an atmospheric general circulation model (SPEEDY) and a reservoir computing-based machine learning algorithm. 
