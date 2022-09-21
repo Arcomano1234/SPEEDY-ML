@@ -5,7 +5,7 @@ program main
 
   use mpires, only : mpi_res, startmpi, distribute_prediction_marker, killmpi, predictionmpicontroller, sendrecievegrid
   use mod_reservoir, only : initialize_model_parameters, allocate_res_new, train_reservoir, start_prediction, initialize_prediction, predict, trained_reservoir_prediction, predict_ml
-  use mod_slab_ocean_reservoir, only : initialize_slab_ocean_model, train_slab_ocean_model, get_training_data_from_atmo, initialize_prediction_slab, start_prediction_slab, predict_slab, predict_slab_ml
+  use mod_slab_ocean_reservoir, only : initialize_slab_ocean_model, train_slab_ocean_model, get_training_data_from_atmo, initialize_prediction_slab, start_prediction_slab, predict_slab, predict_slab_ml, trained_ocean_reservoir_prediction
   use speedy_res_interface, only : startspeedy
   use resdomain, only : processor_decomposition, initializedomain, set_reservoir_by_region
   use mod_utilities, only : main_type, init_random_seed, dp, gaussian_noise, standardize_data_given_pars4d, standardize_data_given_pars3d, standardize_data, init_random_marker
@@ -17,7 +17,7 @@ program main
   integer :: standardizing_vars, i, j, k , t, prediction_num
 
   logical :: runspeedy = .False.
-  logical :: trained_model = .False.
+  logical :: trained_model = .True.
   logical :: slab_model
  
   real(kind=dp), allocatable :: test_state(:), test_feedback(:)
@@ -29,7 +29,7 @@ program main
   !Starts the MPI stuff and initializes mpi_res
   call startmpi()
  
-  mpi_res%numprocs = 1152 
+  !mpi_res%numprocs = 1152 
 
   !Makes the object called res and declares all of the main parameters 
   call initialize_model_parameters(res%model_parameters,mpi_res%proc_num,mpi_res%numprocs)
@@ -44,6 +44,7 @@ program main
   !print *, 'model_parameters%region_indices',res%model_parameters%irank,res%model_parameters%region_indices
   !print *, 'irank, size(model_parameters%region_indices',res%model_parameters%irank, size(res%model_parameters%region_indices)
 
+  !Allocate atmo3d reservoirs and any special ones 
   allocate(res%reservoir(res%model_parameters%num_of_regions_on_proc,res%model_parameters%num_vert_levels))
   allocate(res%grid(res%model_parameters%num_of_regions_on_proc,res%model_parameters%num_vert_levels))
 
@@ -62,6 +63,10 @@ program main
     allocate(res%grid_special(res%model_parameters%num_of_regions_on_proc,res%model_parameters%num_special_reservoirs))
   endif  
 
+
+  !---This is for debugging----!
+  !You can run the code with a small number of processors and look at a few
+  !regions of the globe 
   !if(res%model_parameters%irank == 4) res%model_parameters%region_indices(1) = 954
   !if(res%model_parameters%irank == 2) res%model_parameters%region_indices(1) = 552
   !if(res%model_parameters%irank == 3)  res%model_parameters%region_indices(1) = 36
@@ -154,16 +159,27 @@ program main
            res%reservoir(i,j)%assigned_region = res%model_parameters%region_indices(i)
            res%grid(i,j)%level_index = j
 
-           print *, 'doing allocate_res_new'
-           call allocate_res_new(res%reservoir(i,j),res%grid(i,j),res%model_parameters)
-  
            print *, 'doing trained_reservoir_prediction'
 
-           call initialize_calendar(calendar,1990,1,1,0)
+           call initialize_calendar(calendar,1981,1,1,0)
 
            call trained_reservoir_prediction(res%reservoir(i,j),res%model_parameters,res%grid(i,j))
             
         enddo
+  
+        !Lets read in special reservoir 
+        if(res%model_parameters%slab_ocean_model_bool) then 
+          call initializedomain(res%model_parameters%number_of_regions,res%model_parameters%region_indices(i), &
+                             res%model_parameters%overlap,res%model_parameters%num_vert_levels,j-1,res%model_parameters%vert_loc_overlap, &
+                             res%grid_special(i,1))
+
+
+          res%grid_special(i,1)%level_index = j-1
+
+          res%reservoir_special(i,1)%assigned_region = res%model_parameters%region_indices(i)
+ 
+          call trained_ocean_reservoir_prediction(res%reservoir_special(i,1),res%model_parameters,res%grid_special(i,1),res%reservoir(i,j-1),res%grid(i,j-1))
+        endif 
      enddo
      print *, 'done reading trained model'
   endif  
@@ -172,12 +188,14 @@ program main
   !Loop through all of the regions and vertical levels 
   do i=1,res%model_parameters%num_of_regions_on_proc
      do j=1,res%model_parameters%num_vert_levels
-        print *,'region,level',res%reservoir(i,j)%assigned_region,res%grid(i,j)%level_index
+        print *,'initialize prediction region,level',res%reservoir(i,j)%assigned_region,res%grid(i,j)%level_index
         call initialize_prediction(res%reservoir(i,j),res%model_parameters,res%grid(i,j))  
      enddo 
 
      if(res%model_parameters%slab_ocean_model_bool) then
         if(res%reservoir_special(i,1)%sst_bool_prediction) then
+          print *,'ocean model initialize prediction region,i',res%reservoir_special(i,1)%assigned_region,i
+          print *, 'shape(res%reservoir_special)',shape(res%reservoir_special)
           call initialize_prediction_slab(res%reservoir_special(i,1),res%model_parameters,res%grid_special(i,1),res%reservoir(i,j-1),res%grid(i,j-1))
         endif
      endif 

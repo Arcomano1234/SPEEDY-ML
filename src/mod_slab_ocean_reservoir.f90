@@ -126,11 +126,11 @@ subroutine initialize_slab_ocean_model(reservoir,grid,model_parameters)
   reservoir%k = reservoir%density*reservoir%n*reservoir%n
   reservoir%reservoir_numinputs = reservoir%chunk_size+reservoir%locality
 
-  allocate(reservoir%vals(reservoir%k))
-  allocate(reservoir%win(reservoir%n,reservoir%reservoir_numinputs))
-  allocate(reservoir%wout(reservoir%chunk_size_prediction,reservoir%n+reservoir%chunk_size_speedy))
-  allocate(reservoir%rows(reservoir%k))
-  allocate(reservoir%cols(reservoir%k))
+  if(.not. allocated(reservoir%vals)) allocate(reservoir%vals(reservoir%k))
+  if(.not. allocated(reservoir%win))  allocate(reservoir%win(reservoir%n,reservoir%reservoir_numinputs))
+  if(.not. allocated(reservoir%wout)) allocate(reservoir%wout(reservoir%chunk_size_prediction,reservoir%n+reservoir%chunk_size_speedy))
+  if(.not. allocated(reservoir%rows)) allocate(reservoir%rows(reservoir%k))
+  if(.not. allocated(reservoir%cols)) allocate(reservoir%cols(reservoir%k))
 end subroutine
 
 
@@ -1043,7 +1043,7 @@ subroutine fit_chunk_ml(reservoir,model_parameters,grid)
     if(reservoir%assigned_region == 217) call write_netcdf_2d_non_met_data(reservoir%wout,'wout','region_217_ocean_'//level_char//'wout_'//trim(model_parameters%trial_name)//'.nc','unitless')
     if(reservoir%assigned_region == 218) call write_netcdf_2d_non_met_data(reservoir%wout,'wout','region_218_ocean_'//level_char//'wout_'//trim(model_parameters%trial_name)//'.nc','unitless')
 
-    !call write_trained_res(reservoir,model_parameters,grid)
+    call write_trained_res(reservoir,model_parameters,grid)
 
     print *, 'finish fit'
 end subroutine
@@ -1442,7 +1442,7 @@ subroutine chunking_matmul_hybrid(reservoir,model_parameters,grid,batch_number,t
    return 
 end subroutine  
 
-subroutine write_trained_res(reservoir,model_parameters,grid)
+subroutine write_trained_res_old(reservoir,model_parameters,grid)
   use mod_io, only : write_netcdf_2d_non_met_data, write_netcdf_1d_non_met_data_int, write_netcdf_1d_non_met_data_real
 
   type(reservoir_type), intent(in) :: reservoir
@@ -1475,6 +1475,35 @@ subroutine write_trained_res(reservoir,model_parameters,grid)
 
 end subroutine
 
+subroutine write_trained_res(reservoir,model_parameters,grid)
+  use mod_io, only : write_netcdf_2d_non_met_data_new, write_netcdf_1d_non_met_data_int_new, write_netcdf_1d_non_met_data_real_new, &
+                     write_netcdf_2d_non_met_data_new_double, write_netcdf_1d_non_met_data_real_new_double
+
+  type(reservoir_type), intent(in) :: reservoir
+  type(model_parameters_type), intent(in) :: model_parameters
+  type(grid_type), intent(in)             :: grid
+
+  character(len=:), allocatable :: file_path
+  character(len=4) :: worker_char
+
+  file_path = '/scratch/user/troyarcomano/ML_SPEEDY_WEIGHTS/'
+
+  write(worker_char,'(i0.4)') reservoir%assigned_region
+
+  print *, 'writing ML ocean',reservoir%assigned_region
+  call write_netcdf_2d_non_met_data_new_double(reservoir%win,'win',file_path//'worker_'//worker_char//'_ocean_'//trim(model_parameters%trial_name)//'.nc','unitless','win_x','win_y')
+  call write_netcdf_2d_non_met_data_new_double(reservoir%wout,'wout',file_path//'worker_'//worker_char//'_ocean_'//trim(model_parameters%trial_name)//'.nc','unitless','wout_x','wout_y')
+
+  call write_netcdf_1d_non_met_data_int_new(reservoir%rows,'rows',file_path//'worker_'//worker_char//'_ocean_'//trim(model_parameters%trial_name)//'.nc','unitless','rows_x')
+  call write_netcdf_1d_non_met_data_int_new(reservoir%cols,'cols',file_path//'worker_'//worker_char//'_ocean_'//trim(model_parameters%trial_name)//'.nc','unitless','cols_x')
+
+  call write_netcdf_1d_non_met_data_real_new_double(reservoir%vals,'vals',file_path//'worker_'//worker_char//'_ocean_'//trim(model_parameters%trial_name)//'.nc','unitless','vals_x')
+
+  call write_netcdf_1d_non_met_data_real_new_double(grid%mean,'mean',file_path//'worker_'//worker_char//'_ocean_'//trim(model_parameters%trial_name)//'.nc','unitless','mean_x')
+  call write_netcdf_1d_non_met_data_real_new_double(grid%std,'std',file_path//'worker_'//worker_char//'_ocean_'//trim(model_parameters%trial_name)//'.nc','unitless','std_x')
+
+end subroutine
+
 subroutine write_controller_file(model_parameters)
    type(model_parameters_type), intent(in) :: model_parameters
 
@@ -1495,60 +1524,81 @@ subroutine write_controller_file(model_parameters)
 
 end subroutine 
 
-subroutine trained_reservoir_prediction(reservoir,model_parameters,grid)
-  use mod_linalg, only : mklsparse 
+subroutine trained_ocean_reservoir_prediction(reservoir,model_parameters,grid,reservoir_atmo,grid_atmo)
+  use mod_linalg, only : mklsparse
+  use mod_io, only : read_trained_ocean_res
 
-  type(reservoir_type), intent(inout) :: reservoir
-  type(model_parameters_type), intent(in) :: model_parameters
-  type(grid_type), intent(inout)             :: grid
+  type(reservoir_type), intent(inout)     :: reservoir, reservoir_atmo
+  type(model_parameters_type), intent(inout) :: model_parameters
+  type(grid_type), intent(inout)          :: grid, grid_atmo
 
-  call read_trained_res(reservoir,model_parameters,grid)
+  integer :: mean_std_length
 
-  call mklsparse(reservoir)
-  
-  if((reservoir%tisr_input_bool).and.(reservoir%logp_bool)) then
-    grid%tisr_mean_std_idx = reservoir%local_predictvars*reservoir%local_heightlevels_input+2
-    grid%logp_mean_std_idx = reservoir%local_predictvars*reservoir%local_heightlevels_input+1
-  elseif(reservoir%logp_bool) then
-    grid%logp_mean_std_idx = reservoir%local_predictvars*reservoir%local_heightlevels_input+1
-  elseif(reservoir%tisr_input_bool) then
-    grid%tisr_mean_std_idx = reservoir%local_predictvars*reservoir%local_heightlevels_input+1
-  endif 
-end subroutine
+  integer :: sst_res_input_size, i, counter
 
-subroutine read_trained_res(reservoir,model_parameters,grid)
-  use mod_io, only : read_netcdf_2d_dp, read_netcdf_1d_int, read_netcdf_1d_dp
+  call read_trained_ocean_res(reservoir,model_parameters,grid)
 
-  type(reservoir_type), intent(inout) :: reservoir
-  type(model_parameters_type), intent(in) :: model_parameters
-  type(grid_type), intent(inout)             :: grid
+  if(reservoir%sst_bool_input) then
+     print *, 'has sst',reservoir%assigned_region
+     reservoir%sst_bool_input = .True.
+     reservoir%sst_bool_prediction = .True.
+   else
+     print *, 'doesnt have sst',reservoir%assigned_region
+     reservoir%sst_bool_input = .False.
+     reservoir%sst_bool_prediction = .False.
+   endif
 
-  character(len=:), allocatable :: file_path
-  character(len=4) :: worker_char
-  character(len=1) :: height_char
+   if(reservoir%sst_bool_prediction) then
 
-  file_path = '/scratch/user/troyarcomano/ML_SPEEDY_WEIGHTS/'
+     if((reservoir_atmo%sst_climo_bool).and.(reservoir_atmo%sst_bool_prediction)) then
+        reservoir%sst_climo_input = .False.!.True.
+     else
+        reservoir%sst_climo_input = .False.
+     endif
 
-  write(worker_char,'(i0.4)') reservoir%assigned_region
-  print *, 'reservoir%assigned_region',reservoir%assigned_region
-  write(height_char,'(i0.1)') grid%level_index
-  
-  print *, 'reading win'
-  call read_netcdf_2d_dp('win',file_path//'worker_'//worker_char//'_level_'//height_char//'_win_'//trim(model_parameters%trial_name)//'.nc',reservoir%win)
+     if(reservoir_atmo%precip_bool) then
+         reservoir%precip_input_bool = .False.
+     else
+         reservoir%precip_input_bool = .False.
+     endif
 
-  print *, 'reading wout'
-  call read_netcdf_2d_dp('wout',file_path//'worker_'//worker_char//'_level_'//height_char//'_wout_'//trim(model_parameters%trial_name)//'.nc',reservoir%wout)
+     sst_res_input_size = grid_atmo%inputxchunk*grid_atmo%inputychunk*reservoir_atmo%local_predictvars + grid_atmo%inputxchunk*grid_atmo%inputychunk + grid_atmo%inputxchunk*grid_atmo%inputychunk + grid_atmo%inputxchunk*grid_atmo%inputychunk
 
-  print *, 'reading rows',file_path//'worker_'//worker_char//'_level_'//height_char//'_rows_'//trim(model_parameters%trial_name)//'.nc'
-  call read_netcdf_1d_int('rows',file_path//'worker_'//worker_char//'_level_'//height_char//'_rows_'//trim(model_parameters%trial_name)//'.nc',reservoir%rows)
-  print *, 'reading cols',file_path//'worker_'//worker_char//'_level_'//height_char//'_cols_'//trim(model_parameters%trial_name)//'.nc'
-  call read_netcdf_1d_int('cols',file_path//'worker_'//worker_char//'_level_'//height_char//'_cols_'//trim(model_parameters%trial_name)//'.nc',reservoir%cols)
+     print *, 'grid_atmo%sst_start,grid_atmo%sst_end',grid_atmo%sst_start,grid_atmo%sst_end
 
-  call read_netcdf_1d_dp('vals',file_path//'worker_'//worker_char//'_level_'//height_char//'_vals_'//trim(model_parameters%trial_name)//'.nc',reservoir%vals)
+     grid%atmo3d_start = grid_atmo%atmo3d_start
+     grid%atmo3d_end = grid_atmo%inputxchunk*grid_atmo%inputychunk*reservoir_atmo%local_predictvars!grid_atmo%atmo3d_end
 
-  call read_netcdf_1d_dp('mean',file_path//'worker_'//worker_char//'_level_'//height_char//'_mean_'//trim(model_parameters%trial_name)//'.nc',grid%mean)
-  call read_netcdf_1d_dp('std',file_path//'worker_'//worker_char//'_level_'//height_char//'_std_'//trim(model_parameters%trial_name)//'.nc',grid%std)
+     grid%logp_start = grid%atmo3d_end + 1!grid_atmo%logp_start
+     grid%logp_end = grid_atmo%inputxchunk*grid_atmo%inputychunk*reservoir_atmo%local_predictvars + grid_atmo%inputxchunk*grid_atmo%inputychunk!grid_atmo%logp_end
 
+     grid%sst_start = grid%logp_end + 1!grid_atmo%sst_start
+     grid%sst_end = grid%sst_start + grid_atmo%inputxchunk*grid_atmo%inputychunk - 1!grid_atmo%sst_end
+
+     grid%tisr_start = grid%sst_end + 1
+     grid%tisr_end = grid%tisr_start + grid_atmo%inputxchunk*grid_atmo%inputychunk - 1
+
+     grid%sst_mean_std_idx = grid_atmo%sst_mean_std_idx
+
+     allocate(reservoir%atmo_training_data_idx(sst_res_input_size))
+     counter = 0
+     do i=grid_atmo%atmo3d_end-grid_atmo%inputxchunk*grid_atmo%inputychunk*reservoir_atmo%local_predictvars+1,grid_atmo%logp_end
+        counter = counter + 1
+        reservoir%atmo_training_data_idx(counter) = i
+     enddo
+     do i=grid_atmo%sst_start,grid_atmo%sst_end
+        counter = counter + 1
+        reservoir%atmo_training_data_idx(counter) = i
+     enddo
+     do i=grid_atmo%tisr_start,grid_atmo%tisr_end
+        counter = counter + 1
+        reservoir%atmo_training_data_idx(counter) = i
+     enddo
+
+     call initialize_slab_ocean_model(reservoir,grid,model_parameters)
+
+     call mklsparse(reservoir)
+  endif
 end subroutine
 
 subroutine read_ohtc_parallel_training(reservoir,model_parameters,grid,ohtc_var)

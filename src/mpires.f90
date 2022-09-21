@@ -303,6 +303,11 @@ module mpires
                  call tile_full_grid_with_local_state_vec_res1d(res%model_parameters,res%model_parameters%region_indices(i),j,res%reservoir(i,j)%outvec,wholegrid4d,wholegrid2d,wholegrid_precip)
 
               enddo 
+              if(ocean_model) then
+                if(res%reservoir_special(i,1)%sst_bool_prediction) then
+                  call tile_full_2d_grid_with_local_res(res%model_parameters,res%model_parameters%region_indices(i),res%reservoir_special(i,1)%outvec,wholegrid_sst)
+                endif 
+              endif 
            enddo
         endif
 
@@ -687,6 +692,7 @@ module mpires
                 endif 
 
                 deallocate(sendreceivedata)
+                deallocate(temp1d)
 
                 counter = counter + 1
               endif 
@@ -1154,7 +1160,7 @@ module mpires
         internal_state_vector%ihour = calendar%currenthour
 
         !Slowly adding sst_bias over the whole run 
-        internal_state_vector%sst_bias = (2.0/(model_parameters%predictionlength/3))*(model_parameters%timestep*timestep)
+        internal_state_vector%sst_bias = 0.0_dp!(2.0/(model_parameters%predictionlength/3))*(model_parameters%timestep*timestep)
         print *, 'timestep, internal_state_vector%sst_bias',timestep, internal_state_vector%sst_bias
 
         call agcm_main(1,1,internal_state_vector)  

@@ -20,21 +20,21 @@ subroutine initialize_model_parameters(model_parameters,processor,num_of_procs)
    model_parameters%ml_only = .False.
 
    model_parameters%num_predictions = 1
-   model_parameters%trial_name = '6000_20_20_20_beta_res0.001_beta_model_1.0_prior_0.0_overlap1_vertlevel_1_precip_epsilon0.001_2kbias_10_year_then_platue_speedy_atmo_only' !14d_0.9rho_10noise_beta0.001_20years'  
+   model_parameters%trial_name = '6000_20_20_20_beta_res0.001_beta_model_1.0_prior_0.0_overlap1_vertlevel_1_precip_epsilon0.001_ocean_model7d_0.0001beta_sigma0.6_dp_noise10_out_dp' !14d_0.9rho_10noise_beta0.001_20years'  
    !model_parameters%trial_name = '6000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_4_vertlap_6_slab_ocean_model_true_precip_true'
    !'4000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_4_vertlap_2_full_timestep_1'
    !model_parameters%trial_name = '4000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_4_vertlap_2_full_test_climate_all_tisr_longer'
 
    model_parameters%discardlength = 24*10!7
    model_parameters%traininglength = 227760 - 24*10!166440 - 24*10  !87600*2+24*10!3+24*10!188280 !254040 !81600!188280!0!0!0!166600!81600 !00!58000!67000!77000
-   model_parameters%predictionlength = 8760*31 + 24*5!8760*30 + 24*5!504!8760*11 + 24*5 !504!0
+   model_parameters%predictionlength = 8760*70!*31 + 24*5!8760*30 + 24*5!504!8760*11 + 24*5 !504!0
    model_parameters%synclength = 24*14 !24*14*2 !+ 180*24
    model_parameters%timestep = 6!1 !6
    model_parameters%timestep_slab = 24*7!24*7!*14!*2!*7
 
    global_time_step = model_parameters%timestep
 
-   model_parameters%slab_ocean_model_bool = .False.
+   model_parameters%slab_ocean_model_bool = .True.
    model_parameters%train_on_sst_anomalies = .False.
 
    model_parameters%precip_bool = .True. !.True.  
@@ -158,11 +158,11 @@ subroutine allocate_res_new(reservoir,grid,model_parameters)
   reservoir%k = reservoir%density*reservoir%n*reservoir%n
   reservoir%reservoir_numinputs = reservoir%chunk_size+reservoir%locality
 
-  allocate(reservoir%vals(reservoir%k))
-  allocate(reservoir%win(reservoir%n,reservoir%reservoir_numinputs))
-  allocate(reservoir%wout(reservoir%chunk_size_prediction,reservoir%n+reservoir%chunk_size_speedy))
-  allocate(reservoir%rows(reservoir%k))
-  allocate(reservoir%cols(reservoir%k))
+  if(.not. allocated(reservoir%vals)) allocate(reservoir%vals(reservoir%k))
+  if(.not. allocated(reservoir%win))  allocate(reservoir%win(reservoir%n,reservoir%reservoir_numinputs))
+  if(.not. allocated(reservoir%wout)) allocate(reservoir%wout(reservoir%chunk_size_prediction,reservoir%n+reservoir%chunk_size_speedy))
+  if(.not. allocated(reservoir%rows)) allocate(reservoir%rows(reservoir%k))
+  if(.not. allocated(reservoir%cols)) allocate(reservoir%cols(reservoir%k))
 end subroutine
 
 subroutine gen_res(reservoir)
@@ -803,7 +803,7 @@ subroutine initialize_prediction(reservoir,model_parameters,grid)
    allocate(reservoir%outvec(reservoir%chunk_size_prediction))
    allocate(reservoir%feedback(reservoir%reservoir_numinputs))
 
-   if(model_parameters%slab_ocean_model_bool .and. mpi_res%is_root .and. grid%bottom) then
+   if(model_parameters%slab_ocean_model_bool .and. mpi_res%is_root .and. grid%bottom .and. reservoir%assigned_region == 0 ) then
      print *, 'doing sea mask and default values'
      allocate(model_parameters%base_sst_grid(xgrid, ygrid))
      allocate(model_parameters%sea_mask(xgrid, ygrid))
@@ -1155,6 +1155,7 @@ subroutine fit_chunk_ml(reservoir,model_parameters,grid)
 
     print *, 'finish fit'
 end subroutine
+
 subroutine fit_chunk_hybrid(reservoir,model_parameters,grid)
     !This solves for Wout using least squared solver 
     !This should be called only if you are chunking the training 
@@ -1250,7 +1251,7 @@ subroutine fit_chunk_hybrid(reservoir,model_parameters,grid)
     if(reservoir%assigned_region == 217) call write_netcdf_2d_non_met_data(reservoir%wout,'wout','region_217_level_'//level_char//'wout_'//trim(model_parameters%trial_name)//'.nc','unitless')
     if(reservoir%assigned_region == 218) call write_netcdf_2d_non_met_data(reservoir%wout,'wout','region_218_level_'//level_char//'wout_'//trim(model_parameters%trial_name)//'.nc','unitless')
 
-    !call write_trained_res(reservoir,model_parameters,grid)
+    call write_trained_res(reservoir,model_parameters,grid)
 
     print *, 'finish fit'
 end subroutine 
@@ -1601,7 +1602,7 @@ subroutine chunking_matmul(reservoir,model_parameters,grid,batch_number,training
    return 
 end subroutine  
 
-subroutine write_trained_res(reservoir,model_parameters,grid)
+subroutine write_trained_res_old(reservoir,model_parameters,grid)
   use mod_io, only : write_netcdf_2d_non_met_data, write_netcdf_1d_non_met_data_int, write_netcdf_1d_non_met_data_real
 
   type(reservoir_type), intent(in) :: reservoir
@@ -1634,6 +1635,41 @@ subroutine write_trained_res(reservoir,model_parameters,grid)
 
 end subroutine
 
+subroutine write_trained_res(reservoir,model_parameters,grid)
+  use mod_io, only : write_netcdf_2d_non_met_data_new, write_netcdf_1d_non_met_data_int_new, write_netcdf_1d_non_met_data_real_new, &
+                     write_netcdf_2d_non_met_data_new_double, write_netcdf_1d_non_met_data_real_new_double
+
+  type(reservoir_type), intent(in) :: reservoir
+  type(model_parameters_type), intent(in) :: model_parameters
+  type(grid_type), intent(in)             :: grid
+
+  character(len=:), allocatable :: file_path
+  character(len=4) :: worker_char
+  character(len=1) :: height_char
+
+  file_path = '/scratch/user/troyarcomano/ML_SPEEDY_WEIGHTS/'
+
+  write(worker_char,'(i0.4)') reservoir%assigned_region
+  write(height_char,'(i0.1)') grid%level_index
+
+  if((reservoir%assigned_region == 0).and.(grid%level_index == 1)) then
+    call write_controller_file(model_parameters)
+  endif
+
+  print *, 'write_trained_res',reservoir%assigned_region
+  call write_netcdf_2d_non_met_data_new_double(reservoir%win,'win',file_path//'worker_'//worker_char//'_level_'//height_char//'_'//trim(model_parameters%trial_name)//'.nc','unitless','win_x','win_y')
+  call write_netcdf_2d_non_met_data_new_double(reservoir%wout,'wout',file_path//'worker_'//worker_char//'_level_'//height_char//'_'//trim(model_parameters%trial_name)//'.nc','unitless','wout_x','wout_y')
+
+  call write_netcdf_1d_non_met_data_int_new(reservoir%rows,'rows',file_path//'worker_'//worker_char//'_level_'//height_char//'_'//trim(model_parameters%trial_name)//'.nc','unitless','rows_x')
+  call write_netcdf_1d_non_met_data_int_new(reservoir%cols,'cols',file_path//'worker_'//worker_char//'_level_'//height_char//'_'//trim(model_parameters%trial_name)//'.nc','unitless','cols_x')
+
+  call write_netcdf_1d_non_met_data_real_new_double(reservoir%vals,'vals',file_path//'worker_'//worker_char//'_level_'//height_char//'_'//trim(model_parameters%trial_name)//'.nc','unitless','vals_x')
+
+  call write_netcdf_1d_non_met_data_real_new_double(grid%mean,'mean',file_path//'worker_'//worker_char//'_level_'//height_char//'_'//trim(model_parameters%trial_name)//'.nc','unitless','mean_x')
+  call write_netcdf_1d_non_met_data_real_new_double(grid%std,'std',file_path//'worker_'//worker_char//'_level_'//height_char//'_'//trim(model_parameters%trial_name)//'.nc','unitless','std_x')
+
+end subroutine
+
 subroutine write_controller_file(model_parameters)
    type(model_parameters_type), intent(in) :: model_parameters
 
@@ -1655,59 +1691,107 @@ subroutine write_controller_file(model_parameters)
 end subroutine 
 
 subroutine trained_reservoir_prediction(reservoir,model_parameters,grid)
-  use mod_linalg, only : mklsparse 
+  use mod_linalg, only : mklsparse
+  use mod_io, only : read_trained_res
 
-  type(reservoir_type), intent(inout) :: reservoir
+  type(reservoir_type), intent(inout)     :: reservoir
   type(model_parameters_type), intent(in) :: model_parameters
-  type(grid_type), intent(inout)             :: grid
+  type(grid_type), intent(inout)          :: grid
+
+  integer :: mean_std_length
+
+  if(grid%bottom) then
+    reservoir%logp_bool = .True.
+    reservoir%tisr_input_bool = .True.
+    grid%logp_bool = .True.
+
+    reservoir%sst_bool = model_parameters%slab_ocean_model_bool
+    reservoir%sst_climo_bool = .True. !.False.
+
+    reservoir%precip_input_bool = model_parameters%precip_bool
+    reservoir%precip_bool = model_parameters%precip_bool
+
+    reservoir%m = 6000
+
+  else
+    reservoir%sst_climo_bool = .False.
+    reservoir%logp_bool = .False.
+    reservoir%tisr_input_bool = .True.
+    reservoir%sst_bool = .False.
+    reservoir%precip_input_bool = .False.
+    reservoir%precip_bool = .False.
+  endif
+
+  reservoir%local_predictvars = model_parameters%full_predictvars
+  reservoir%local_heightlevels_input = grid%inputzchunk
+
+  reservoir%local_heightlevels_res = grid%reszchunk
 
   call read_trained_res(reservoir,model_parameters,grid)
 
+  !Get number of height levels * vars + 2d variables
+  mean_std_length = model_parameters%full_predictvars*grid%inputzchunk
+  if(reservoir%logp_bool) then
+    mean_std_length = mean_std_length + 1
+    grid%logp_mean_std_idx = mean_std_length
+  endif
+
+  if(reservoir%tisr_input_bool) then
+    mean_std_length = mean_std_length + 1
+    grid%tisr_mean_std_idx = mean_std_length
+  endif
+
+  if(reservoir%precip_bool)  then
+    mean_std_length = mean_std_length + 1
+    grid%precip_mean_std_idx = mean_std_length
+  endif
+
+  if(reservoir%sst_bool) then
+    mean_std_length = mean_std_length + 1
+    grid%sst_mean_std_idx = mean_std_length
+    print *, 'grid%std(grid%sst_mean_std_idx)',grid%std(grid%sst_mean_std_idx)
+    if(grid%std(grid%sst_mean_std_idx) > 0.2) then
+      reservoir%sst_bool_input = .True.
+    else
+      reservoir%sst_bool_input = .False.
+    endif
+  endif
+
+  call allocate_res_new(reservoir,grid,model_parameters)
+
   call mklsparse(reservoir)
-  
-  if((reservoir%tisr_input_bool).and.(reservoir%logp_bool)) then
-    grid%tisr_mean_std_idx = reservoir%local_predictvars*reservoir%local_heightlevels_input+2
-    grid%logp_mean_std_idx = reservoir%local_predictvars*reservoir%local_heightlevels_input+1
-  elseif(reservoir%logp_bool) then
-    grid%logp_mean_std_idx = reservoir%local_predictvars*reservoir%local_heightlevels_input+1
-  elseif(reservoir%tisr_input_bool) then
-    grid%tisr_mean_std_idx = reservoir%local_predictvars*reservoir%local_heightlevels_input+1
-  endif 
+
+  grid%logp_start = 0
+  grid%logp_end = 0
+  grid%sst_start = 0
+  grid%sst_end = 0
+
+  grid%atmo3d_start = 1
+  grid%atmo3d_end = model_parameters%full_predictvars*grid%inputxchunk*grid%inputychunk*grid%inputzchunk
+
+  grid%predict_start = 1
+  grid%predict_end = grid%atmo3d_end
+
+   if(reservoir%logp_bool) then
+     grid%logp_start = grid%atmo3d_end + 1
+     grid%logp_end = grid%atmo3d_end + reservoir%logp_size_input
+     grid%predict_end = grid%logp_end
+   endif
+
+   if(reservoir%precip_bool) then
+     grid%precip_start = grid%atmo3d_end + reservoir%logp_size_input + 1
+     grid%precip_end = grid%precip_start + reservoir%precip_size_input - 1
+     grid%predict_end = grid%precip_end
+   endif
+ 
+   if(reservoir%sst_bool_input) then
+     grid%sst_start = grid%atmo3d_end + reservoir%logp_size_input + reservoir%precip_size_input + 1
+     grid%sst_end =  grid%sst_start + reservoir%sst_size_input - 1
+   endif
+
+   if(reservoir%tisr_input_bool) then
+     grid%tisr_start = grid%atmo3d_end + reservoir%logp_size_input + reservoir%precip_size_input + reservoir%sst_size_input + 1
+     grid%tisr_end = grid%tisr_start + reservoir%tisr_size_input - 1
+   endif
 end subroutine
-
-subroutine read_trained_res(reservoir,model_parameters,grid)
-  use mod_io, only : read_netcdf_2d_dp, read_netcdf_1d_int, read_netcdf_1d_dp
-
-  type(reservoir_type), intent(inout) :: reservoir
-  type(model_parameters_type), intent(in) :: model_parameters
-  type(grid_type), intent(inout)             :: grid
-
-  character(len=:), allocatable :: file_path
-  character(len=4) :: worker_char
-  character(len=1) :: height_char
-
-  file_path = '/scratch/user/troyarcomano/ML_SPEEDY_WEIGHTS/'
-
-  write(worker_char,'(i0.4)') reservoir%assigned_region
-  print *, 'reservoir%assigned_region',reservoir%assigned_region
-  write(height_char,'(i0.1)') grid%level_index
-  
-  print *, 'reading win'
-  call read_netcdf_2d_dp('win',file_path//'worker_'//worker_char//'_level_'//height_char//'_win_'//trim(model_parameters%trial_name)//'.nc',reservoir%win)
-
-  print *, 'reading wout'
-  call read_netcdf_2d_dp('wout',file_path//'worker_'//worker_char//'_level_'//height_char//'_wout_'//trim(model_parameters%trial_name)//'.nc',reservoir%wout)
-
-  print *, 'reading rows',file_path//'worker_'//worker_char//'_level_'//height_char//'_rows_'//trim(model_parameters%trial_name)//'.nc'
-  call read_netcdf_1d_int('rows',file_path//'worker_'//worker_char//'_level_'//height_char//'_rows_'//trim(model_parameters%trial_name)//'.nc',reservoir%rows)
-  print *, 'reading cols',file_path//'worker_'//worker_char//'_level_'//height_char//'_cols_'//trim(model_parameters%trial_name)//'.nc'
-  call read_netcdf_1d_int('cols',file_path//'worker_'//worker_char//'_level_'//height_char//'_cols_'//trim(model_parameters%trial_name)//'.nc',reservoir%cols)
-
-  call read_netcdf_1d_dp('vals',file_path//'worker_'//worker_char//'_level_'//height_char//'_vals_'//trim(model_parameters%trial_name)//'.nc',reservoir%vals)
-
-  call read_netcdf_1d_dp('mean',file_path//'worker_'//worker_char//'_level_'//height_char//'_mean_'//trim(model_parameters%trial_name)//'.nc',grid%mean)
-  call read_netcdf_1d_dp('std',file_path//'worker_'//worker_char//'_level_'//height_char//'_std_'//trim(model_parameters%trial_name)//'.nc',grid%std)
-
-end subroutine
-
 end module 
