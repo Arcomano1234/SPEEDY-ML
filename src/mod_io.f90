@@ -441,7 +441,7 @@ module mod_io
 
              !Write out the values
              copy3d(3,:,:) = model_parameters%precip_epsilon * ( e_constant**grid3d(3,:,:) - 1)
-             copy3d(3,:,:) = copy3d(3,:,:) * 25.4!* 39.3701
+             copy3d(3,:,:) = copy3d(3,:,:) * 25.4 * 1000.0!* 39.3701
 
              call nc_check(nf90_put_var(file_id, array_id, copy3d(3,:,:), start=start3d, count=varcount3d))
 
