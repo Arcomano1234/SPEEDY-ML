@@ -4,4 +4,10 @@
 *.o
 *.mod
 *.exe
+*.nc
+*.log
+fort.*
+flux.grd
+
+plots/
 
