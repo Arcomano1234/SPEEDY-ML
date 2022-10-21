@@ -7,7 +7,7 @@ Download the SPEEDY-ML model with:
 <pre><code> $ git clone git@github.com:Arcomano1234/SPEEDY-ML.git
 </code></pre>
 
-##Quick Setup
+## Quick Setup
 1. Fill in the necessary information in config.sh
 
 2. If you want to train your model use scripts/get_training_prediction_data.sh. If you want to use an already trained model skip to step 5.
@@ -21,6 +21,10 @@ Download the SPEEDY-ML model with:
 6. After the predictions are done, a number of python scripts are provided to analyze the forecasts or climate simulations 
 
 ## Training Data
-To download training data first 
+To download training data run scripts/get_training_prediction_data.sh . This script downloads ERA5 data using parallel threads with each thread downloading a year of data (so max threads would be number of years of data). 
+
+## Trained Model 
+Trained model weights for a hybrid atmospheric model and machine learning only ocean model are provided at [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7222831.svg)](https://doi.org/10.5281/zenodo.7222831). The get_trained_coupled_data.sh will actually download these weights and move them into the appropriate directories.
+
 
 
