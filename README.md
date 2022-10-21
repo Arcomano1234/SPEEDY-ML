@@ -7,7 +7,7 @@ Download the SPEEDY-ML model with:
 <pre><code> $ git clone git@github.com:Arcomano1234/SPEEDY-ML.git
 </code></pre>
 
-## Prerequisite
+## Prerequisites
 SPEEDY-ML requires a MPI built NetCDF library, [ARPACK-NG](https://github.com/opencollab/arpack-ng), and Intel oneapi. 
 This code has been tested with both intel 2020 and gfortran 2021 with openmpi. 
 
