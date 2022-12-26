@@ -1,12 +1,12 @@
 # ignore ALL .log files
 *.log
-
 *.o
-*.mod
+*.mod*
 *.exe
 *.nc
-*.log
+*.slurm
 fort.*
+*.grd
 flux.grd
 
 plots/
