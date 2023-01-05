@@ -17,7 +17,7 @@ program main
   integer :: standardizing_vars, i, j, k , t, prediction_num
 
   logical :: runspeedy = .False.
-  logical :: trained_model = .True.
+  logical :: trained_model = .False.
   logical :: slab_model
  
   real(kind=dp), allocatable :: test_state(:), test_feedback(:)

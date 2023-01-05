@@ -39,11 +39,12 @@ subroutine ini_sea(istart)
         temp = reshape(internal_state_vector%sst_hybrid,[ix*il])
         diff = sst_am - temp
         where(diff < 6.0)
-           sst_am = temp + internal_state_vector%sst_bias
+           sst_am = temp 
         end where 
+        sst_am = sst_am + internal_state_vector%sst_bias
         sst_am(:)  = sst_am(:)+sice_am(:)*(tice_am(:)-sst_am(:))
     endif
-    sst_am(:) = sst_am(:) + internal_state_vector%sst_bias 
+    sst_am(:) = sst_am(:) 
 end
 
 subroutine atm2sea(jday)

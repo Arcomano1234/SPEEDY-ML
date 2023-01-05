@@ -346,11 +346,19 @@ module mod_utilities
     !Current outvec (prediction) for this reservoir
     real(kind=dp), allocatable :: outvec(:)
 
+    !Current ml component contribution of the outvec for this reservoir
+    real(kind=dp), allocatable :: v_ml(:)
+
+    !Current SPEEDY contribution of the outvec for this reservoir
+    real(kind=dp), allocatable :: v_p(:)
+
     !Current feedback for this reservoir 
     real(kind=dp), allocatable :: feedback(:)
     
     !TISR for the full year to save time reading and writing during prediction
     real(kind=dp), allocatable :: full_tisr(:,:,:) 
+
+    real(kind=dp), allocatable :: full_sst(:,:,:)
 
     integer :: predictvars2d
   end type reservoir_type
@@ -413,6 +421,7 @@ module mod_utilities
     character(len=3)  :: trial_number
     character(len=10) :: trial_date
     character(len=:), allocatable :: trial_name
+    character(len=:), allocatable :: trial_name_extra_end
 
     !Make sure SPEEDY code doesnt break ours
     logical :: run_speedy
@@ -481,6 +490,15 @@ module mod_utilities
     real(kind=dp), allocatable :: base_sst_grid(:,:)
     real(kind=dp), allocatable :: sea_mask(:,:)
 
+    type(opened_netcdf_type), allocatable :: opened_netcdf_files(:)
+
+    logical :: non_stationary_ocn_climo
+  
+    real(kind=dp) :: final_sst_bias
+
+    real(kind=dp) :: current_sst_bias
+
+    logical :: outvec_component_contribs
   end type model_parameters_type
  
   type main_type
@@ -600,6 +618,15 @@ module mod_utilities
  
   end type calendar_type 
 
+  type opened_netcdf_type
+     logical :: is_opened
+     logical :: is_closed
+
+     integer :: ncid
+     
+     character(len=:), allocatable :: filename
+  end type opened_netcdf_type
+
   !Overload the standardize_data routine 
   interface standardize_data
    module procedure standardize_data_1d
@@ -609,6 +636,7 @@ module mod_utilities
    module procedure standardize_data_5d
    module procedure standardize_data_5d_logp
    module procedure standardize_data_5d_logp_tisr
+   module procedure standardize_data_5d_logp_tisr_local_region
   end interface 
 
   !Overload unstandardize_data routine  
@@ -825,8 +853,12 @@ module mod_utilities
 
       if((sum(inputdata**2)-sum(inputdata)**2/size(inputdata)) > 0) then
         mean_ = sum(inputdata)/size(inputdata)
+ 
+        mean_ = mean_ !+ 2.0
         !sqrt(sum((inputdata(i,:,:,j,:) - mean_)**2)/size(inputdata(i,:,:,j,:)))
         std_ = sqrt(sum((inputdata-mean_)**2)/size(inputdata))
+ 
+        std_ = std_ !* 1.2
         print *, 'std_',std_
         if(std_ > 0.2) then
           !Subtracts the mean out and then divides by the std
@@ -980,6 +1012,125 @@ module mod_utilities
       return
     end subroutine
 
+    subroutine standardize_data_5d_logp_tisr_local_region(reservoir,grid,inputdata,logp,tisr,mean,std)
+      type(reservoir_type), intent(in) :: reservoir 
+      type(grid_type), intent(in)      :: grid
+
+      real(kind=dp), intent(inout)     :: inputdata(:,:,:,:,:) !5d var with data being 1 being a variable type 2-4 xyz and 5th being time
+      real(kind=dp), intent(inout)     :: logp(:,:,:), tisr(:,:,:)
+      real(kind=dp), intent(out)       :: mean(:), std(:)
+
+      real(kind=dp)                :: mean_, std_
+
+      integer       :: length, height
+      integer       :: i, j, l
+
+      length = size(inputdata,1)
+      height = size(inputdata,4)
+
+      l = 1
+      do i=1, length
+         do j=1, height
+            mean_ = sum(inputdata(i,grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,j,:))/size(inputdata(i,grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,j,:))
+            std_ = sqrt(sum((inputdata(i,grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,j,:) - mean_)**2)/size(inputdata(i,grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,j,:)))
+
+            call standardize_data_given_pars3d(inputdata(i,:,:,j,:),mean_,std_)
+
+            mean(l) = mean_
+            std(l) = std_
+            l = l + 1
+         enddo
+      end do
+
+      !logp
+      mean_ =sum(logp(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,:))/size(logp(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,:))
+      std_ = sqrt(sum((logp(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,:) - mean_)**2)/size(logp(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,:)))
+
+      call standardize_data_given_pars3d(logp,mean_,std_)
+
+      mean(l) = mean_
+      std(l) = std_
+
+      !Tisr
+      l = l + 1
+
+      mean_ = sum(tisr(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,:))/size(tisr(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,:))
+      std_ = sqrt(sum((tisr(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,:) - mean_)**2)/size(tisr(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,:)))
+
+      call standardize_data_given_pars3d(tisr,mean_,std_)
+
+      mean(l) = mean_
+      std(l) = std_
+      return
+    end subroutine 
+   
+    subroutine standardize_data_5d_logp_tisr_gp_by_gp(reservoir,grid,inputdata,logp,tisr,mean,std)
+      type(reservoir_type), intent(in) :: reservoir
+      type(grid_type), intent(in)      :: grid
+
+      real(kind=dp), intent(inout)     :: inputdata(:,:,:,:,:) !5d var with data being 1 being a variable type 2-4 xyz and 5th being time
+      real(kind=dp), intent(inout)     :: logp(:,:,:), tisr(:,:,:)
+      real(kind=dp), intent(out)       :: mean(:), std(:)
+
+      real(kind=dp)                :: mean_, std_
+
+      integer       :: vars, height, width, length
+      integer       :: i, j, k, l, counter
+
+      vars = size(inputdata,1)
+      width = size(inputdata,2)
+      length = size(inputdata,3)
+      height = size(inputdata,4)
+      
+
+      counter = 1
+      do l=1, vars
+         do i=1, width
+            do j=1, length
+               do k=1, height
+                  mean_ = sum(inputdata(l,i,j,k,:))/size(inputdata(l,i,j,k,:))
+                  std_ = sqrt(sum((inputdata(l,i,j,k,:) - mean_)**2)/size(inputdata(l,i,j,k,:)))
+
+                  call standardize_data_given_pars1d(inputdata(l,i,j,k,:),mean_,std_)
+
+                  mean(counter) = mean_
+                  std(counter) = std_
+                  counter = counter + 1
+               enddo 
+            enddo 
+         enddo
+      end do
+
+      !logp
+      do i=1, width
+         do j=1, length
+            mean_ =sum(logp(i,j,:))/size(logp(i,j,:))
+            std_ = sqrt(sum((logp(i,j,:) - mean_)**2)/size(logp(i,j,:)))
+
+            call standardize_data_given_pars1d(logp(i,j,:),mean_,std_)
+
+            mean(counter) = mean_
+            std(counter) = std_ 
+  
+            counter = counter + 1
+         enddo 
+      enddo 
+
+      !Tisr
+      do i=1, width
+         do j=1, length
+            mean_ =sum(tisr(i,j,:))/size(tisr(i,j,:))
+            std_ = sqrt(sum((tisr(i,j,:) - mean_)**2)/size(tisr(i,j,:)))
+
+            call standardize_data_given_pars1d(tisr(i,j,:),mean_,std_)
+
+            mean(counter) = mean_
+            std(counter) = std_
+
+            counter = counter + 1
+         enddo
+      enddo
+    end subroutine 
     subroutine standardize_data_5d_logp_tisr(reservoir,inputdata,logp,tisr,mean,std)
       type(reservoir_type), intent(in) :: reservoir
 
@@ -1239,6 +1390,7 @@ module mod_utilities
 
       call random_gaussian_gen_1d(gaussnoise,sigma,mean)
 
+      !TODO
       noisy_data = inputdata+gaussnoise*noisemag*inputdata
 
       deallocate(gaussnoise)
@@ -1267,7 +1419,10 @@ module mod_utilities
 
       call random_gaussian_gen_1d(gaussnoise,sigma,mean)
 
+      !!!!TODO NOTE 
       noisy_data(1:grid%precip_start-1) = inputdata(1:grid%precip_start-1)+gaussnoise(1:grid%precip_start-1)*noisemag*inputdata(1:grid%precip_start-1)
+
+      !Precip stuff
 
       allocate(temp(grid%precip_end - grid%precip_start))
 
@@ -1277,7 +1432,7 @@ module mod_utilities
 
       temp = model_parameters%precip_epsilon * (e_constant**temp - 1)
 
-      temp = temp + gaussnoise(grid%precip_start:grid%precip_end)*noisemag*temp
+      temp = temp + gaussnoise(grid%precip_start:grid%precip_end)*noisemag!*temp
 
       temp = abs(temp) !NOTE make sure we dont get any negative numbers
 
@@ -1289,6 +1444,8 @@ module mod_utilities
 
       noisy_data(grid%precip_start:grid%precip_end) = temp
 
+ 
+      !Rest of stuff
       noisy_data(grid%precip_end + 1:size(inputdata,1)) = inputdata(grid%precip_end + 1:size(inputdata,1))+gaussnoise(grid%precip_end + 1:size(inputdata,1))*noisemag*inputdata(grid%precip_end + 1:size(inputdata,1))
 
       deallocate(gaussnoise) 
@@ -1643,4 +1800,22 @@ module mod_utilities
        deallocate(copy)
      end subroutine
 
+     function linear_increase_then_platue(start_val,final_val,current_time,platue_time) result(val)
+       !Function that should be used to make a linearly increasing sst bias that
+       !starts at start_val and linearly increases to final_val at platue_time
+       real(kind=dp), intent(in)  :: start_val
+       real(kind=dp), intent(in)  :: final_val
+       real(kind=dp), intent(in)  :: current_time
+       real(kind=dp), intent(in)  :: platue_time
+
+       real(kind=dp)  :: val  
+
+       if(current_time > platue_time) then 
+        val = final_val
+       else
+        val = (final_val/(platue_time))*(current_time) + start_val
+       endif 
+
+       return 
+    end function 
 end module mod_utilities

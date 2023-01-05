@@ -1321,6 +1321,46 @@ module resdomain
         endif 
         return
       end subroutine
+
+      subroutine standardize_speedy_data_gp_by_gp(reservoir,grid,speedy_data)
+        use mod_utilities, only : standardize_data_given_pars3d, speedy_data_type
+
+        type(reservoir_type), intent(inout)   :: reservoir
+        type(speedy_data_type), intent(inout) :: speedy_data
+        type(grid_type), intent(inout)        :: grid
+
+        integer       :: vars, width, length, height, speedy_height, speedy_x, speedy_y
+        integer       :: i, j, k, l, counter
+
+        vars = reservoir%local_predictvars
+        width = grid%inputxchunk
+        length = grid%inputychunk
+        height = reservoir%local_heightlevels_input
+        counter = 1
+
+        !TODO 
+        do l=1, vars 
+           speedy_height = 1   
+           speedy_x = 1
+           speedy_y = 1
+           do i=1, width
+                do j=1, length
+                      do k=1, height
+                         if((k >= grid%tdata_zstart).and.(k <= grid%tdata_zend).and.(i >= grid%tdata_xstart).and.(i <= grid%tdata_xend).and.(j >= grid%tdata_ystart).and.(j <= grid%tdata_yend)) then !TODO) then
+                            call standardize_data_given_pars3d(speedy_data%speedyvariables(i,:,:,speedy_height,:),grid%mean(l),grid%std(l))
+                            speedy_height = speedy_height + 1
+                         endif
+                        counter = counter + 1
+                      enddo 
+                enddo
+            enddo 
+        end do
+
+        if(reservoir%logp_bool) then
+          call standardize_data_given_pars3d(speedy_data%speedy_logp,grid%mean(l),grid%std(l))
+        endif
+        return
+      end subroutine
  
       subroutine standardize_grid_res_tile_statevec(reservoir,grid,temp4d,temp2d,state_vec)
         !Subroutine to take state vector input and standardize the data

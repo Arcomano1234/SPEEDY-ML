@@ -30,8 +30,6 @@ module mod_io
     
      !-----------NETCDF SECTION ------------------!
      subroutine write_netcdf_4d(model_parameters,dat,timestep,filename)
-       use netcdf
-
        use stringtype, only : string 
        use mod_utilities, only : main_type
 
@@ -187,7 +185,7 @@ module mod_io
        !copy data
        allocate(copy,source=grid4d)
 
-      
+     
        !if(res%specific_humidity_log_bool) then    
        !  copy(4,:,:,:) = e_constant**copy(4,:,:,:) - res%specific_humidity_epsilon
        !endif 
@@ -1181,8 +1179,6 @@ module mod_io
      end subroutine
 
      subroutine write_netcdf_2d(var,varname,filename,units)
-       use netcdf
-
        real(kind=dp), intent(in)    :: var(:,:)
        character(len=*), intent(in) :: varname
        character(len=*), intent(in) :: filename
@@ -1248,48 +1244,7 @@ module mod_io
       call nc_check(nf90_close(file_id))
      end subroutine 
 
-     subroutine write_netcdf_2d_non_met_data(var,varname,filename,units)
-       real(kind=dp), intent(in)    :: var(:,:)
-       character(len=*), intent(in) :: varname
-       character(len=*), intent(in) :: filename
-       character(len=*), intent(in) :: units
-
-       integer, parameter :: numdims=2
-       integer :: dimsx,dimsy
-
-       integer :: file_id, xdim_id, ydim_id, timedim_id
-       integer :: array_id, xvar_id, yvar_id
-       integer :: start(numdims),varcount(numdims)
-       integer, dimension(numdims) :: arrdims
-
-       integer :: i, counter
-
-       dimsx = size(var,1)
-       dimsy = size(var,2)
-
-       varcount =  [integer:: dimsx, dimsy ]
-       start =  [integer:: 1, 1]
-
-       call nc_check(nf90_create(path=filename,cmode=NF90_CLOBBER,ncid=file_id))
-
-       call nc_check(nf90_def_dim(file_id, 'X', dimsx, xdim_id))
-       call nc_check(nf90_def_dim(file_id, 'Y', dimsy, ydim_id))
-
-       arrdims = (/ xdim_id, ydim_id/)
-
-       call nc_check(nf90_def_var(file_id,varname,NF90_REAL,arrdims,array_id))
-
-       call nc_check(nf90_put_att(file_id, array_id, "units", units))
-
-       call nc_check(nf90_enddef(file_id))
-
-       !Write out the values
-       call nc_check(nf90_put_var(file_id, array_id, var,start=start, count=varcount))
-
-       call nc_check(nf90_close(file_id))
-     end subroutine
-
-     subroutine write_netcdf_2d_non_met_data_new(var,varname,filename,units,x_dim,y_dim)
+     subroutine write_netcdf_2d_non_met_data(var,varname,filename,units,x_dim,y_dim)
        real(kind=dp), intent(in)    :: var(:,:)
        character(len=*), intent(in) :: varname
        character(len=*), intent(in) :: filename
@@ -1314,10 +1269,10 @@ module mod_io
 
        if(.not.file_exists(filename)) then
           call nc_check(nf90_create(path=filename,cmode=NF90_CLOBBER,ncid=file_id),message='write_netcdf_2d_non_met_data create')
-       else
+       else 
           call nc_check(nf90_open(filename,nf90_write,file_id),message='write_netcdf_2d_non_met_data nf90_open')
           call nc_check(nf90_redef(file_id))
-       endif
+       endif 
 
        call nc_check(nf90_def_dim(file_id, x_dim, dimsx, xdim_id),message='write_netcdf_2d_non_met_data nf90_def_dimx'//filename//'_'//x_dim)
        call nc_check(nf90_def_dim(file_id, y_dim, dimsy, ydim_id),message='write_netcdf_2d_non_met_data nf90_def_dimy'//filename)
@@ -1336,12 +1291,15 @@ module mod_io
        call nc_check(nf90_close(file_id),message='write_netcdf_2d_non_met_data nf90_close')
      end subroutine
 
-     subroutine write_netcdf_2d_non_met_data_new_double(var,varname,filename,units,x_dim,y_dim)
-       real(kind=dp), intent(in)    :: var(:,:)
+     subroutine write_netcdf_2d_non_met_data_timeseries(var,varname,filename,timestep,units,x_dim,t_dim)
+       real(kind=dp), intent(in)    :: var(:)
+
+       integer, intent(in)          :: timestep
+
        character(len=*), intent(in) :: varname
        character(len=*), intent(in) :: filename
        character(len=*), intent(in) :: units
-       character(len=*), intent(in) :: x_dim, y_dim
+       character(len=*), intent(in) :: x_dim, t_dim
 
        integer, parameter :: numdims=2
        integer :: dimsx,dimsy
@@ -1354,28 +1312,27 @@ module mod_io
        integer :: i, counter
 
        dimsx = size(var,1)
-       dimsy = size(var,2)
 
-       varcount =  [integer:: dimsx, dimsy ]
-       start =  [integer:: 1, 1]
+       varcount =  [integer:: dimsx, 1 ]
+       start =  [integer:: 1, timestep]
 
-       if(.not.file_exists(filename)) then
+       if(timestep == 1) then
           call nc_check(nf90_create(path=filename,cmode=NF90_CLOBBER,ncid=file_id),message='write_netcdf_2d_non_met_data create')
+          call nc_check(nf90_def_dim(file_id, x_dim, dimsx, xdim_id),message='write_netcdf_2d_non_met_data nf90_def_dimx'//filename//'_'//x_dim)
+          call nc_check(nf90_def_dim(file_id, t_dim, NF90_UNLIMITED, timedim_id),message='write_netcdf_2d_non_met_data nf90_def_dimy'//filename)
+
+          arrdims = (/ xdim_id, timedim_id/)
+
+          call nc_check(nf90_def_var(file_id,varname,NF90_REAL,arrdims,array_id),message='write_netcdf_2d_non_met_data nf90_def_var'//filename)
+
+          call nc_check(nf90_put_att(file_id, array_id, "units", units),message='write_netcdf_2d_non_met_data nf90_put_att'//filename)
+
+          call nc_check(nf90_enddef(file_id),message='write_netcdf_2d_non_met_data nf90_enddef'//filename)
        else
           call nc_check(nf90_open(filename,nf90_write,file_id),message='write_netcdf_2d_non_met_data nf90_open')
-          call nc_check(nf90_redef(file_id))
+
+          call nc_check(nf90_inq_varid(file_id,varname,array_id),message='write_netcdf_1d_non_met_data_real_over nf90_inq_varid'//varname)
        endif
-
-       call nc_check(nf90_def_dim(file_id, x_dim, dimsx, xdim_id),message='write_netcdf_2d_non_met_data nf90_def_dimx'//filename//'_'//x_dim)
-       call nc_check(nf90_def_dim(file_id, y_dim, dimsy, ydim_id),message='write_netcdf_2d_non_met_data nf90_def_dimy'//filename)
-
-       arrdims = (/ xdim_id, ydim_id/)
-
-       call nc_check(nf90_def_var(file_id,varname,NF90_DOUBLE,arrdims,array_id),message='write_netcdf_2d_non_met_data nf90_def_var'//filename)
-
-       call nc_check(nf90_put_att(file_id, array_id, "units", units),message='write_netcdf_2d_non_met_data nf90_put_att'//filename)
-
-       call nc_check(nf90_enddef(file_id),message='write_netcdf_2d_non_met_data nf90_enddef'//filename)
 
        !Write out the values
        call nc_check(nf90_put_var(file_id, array_id, var,start=start, count=varcount),message='write_netcdf_2d_non_met_data nf90_put_var'//filename)
@@ -1417,46 +1374,37 @@ module mod_io
         return
      end subroutine
 
-     subroutine write_netcdf_1d_non_met_data_int(var,varname,filename,units)
-       integer,       intent(in)    :: var(:)
-       character(len=*), intent(in) :: varname
-       character(len=*), intent(in) :: filename
-       character(len=*), intent(in) :: units
+     subroutine read_netcdf_2d_dp_opened(varname,ncid,var)
+        character(len=*), intent(in) :: varname
+        integer, intent(in)          :: ncid
 
-       integer, parameter :: numdims=1
-       integer :: dimsx,dimsy
+        real(kind=dp), allocatable, intent(out) :: var(:,:)
 
-       integer :: file_id, xdim_id, ydim_id, timedim_id
-       integer :: array_id, xvar_id, yvar_id
-       integer :: start(numdims),varcount(numdims)
-       integer, dimension(numdims) :: arrdims
+        !Parmeter
+        integer, parameter :: numofdims = 2 !We can assume its a 2d variable
 
-       integer :: i, counter
+        !Local netcdf variables
+        integer :: varid
 
-       dimsx = size(var,1)
+        integer :: dimids(numofdims), dim_length(numofdims)
 
-       varcount = [dimsx]
-       start =  [integer:: 1]
+        integer :: i
 
-       call nc_check(nf90_create(path=filename,cmode=NF90_CLOBBER,ncid=file_id))
+        call nc_check(nf90_inq_varid(ncid,varname,varid))
 
-       call nc_check(nf90_def_dim(file_id, 'X', dimsx, xdim_id))
+        call nc_check(nf90_inquire_variable(ncid,varid,dimids=dimids))
 
-       arrdims = (/ xdim_id/)
+        do i=1,numofdims
+           call nc_check(nf90_inquire_dimension(ncid,dimids(i),len=dim_length(i)))
+        enddo
 
-       call nc_check(nf90_def_var(file_id,varname,NF90_INT,arrdims,array_id))
+        allocate(var(dim_length(1),dim_length(2)))
 
-       call nc_check(nf90_put_att(file_id, array_id, "units", units))
-
-       call nc_check(nf90_enddef(file_id))
-
-       !Write out the values
-       call nc_check(nf90_put_var(file_id, array_id, var,start=start, count=varcount))
-
-       call nc_check(nf90_close(file_id))
+        call nc_check(nf90_get_var(ncid,varid,var))
+        return
      end subroutine
 
-     subroutine write_netcdf_1d_non_met_data_int_new(var,varname,filename,units,x_dim)
+     subroutine write_netcdf_1d_non_met_data_int(var,varname,filename,units,x_dim)
        integer,       intent(in)    :: var(:)
        character(len=*), intent(in) :: varname
        character(len=*), intent(in) :: filename
@@ -1502,46 +1450,7 @@ module mod_io
        call nc_check(nf90_close(file_id))
      end subroutine
 
-     subroutine write_netcdf_1d_non_met_data_real(var,varname,filename,units)
-       real(kind=dp), intent(in)    :: var(:)
-       character(len=*), intent(in) :: varname
-       character(len=*), intent(in) :: filename
-       character(len=*), intent(in) :: units
-
-       integer, parameter :: numdims=1
-       integer :: dimsx,dimsy
-
-       integer :: file_id, xdim_id, ydim_id, timedim_id
-       integer :: array_id, xvar_id, yvar_id
-       integer :: start(numdims),varcount(numdims)
-       integer, dimension(numdims) :: arrdims
-
-       integer :: i, counter
-
-       dimsx = size(var,1)
-
-       varcount = [dimsx]
-       start =  [integer:: 1]
-
-       call nc_check(nf90_create(path=filename,cmode=NF90_CLOBBER,ncid=file_id))
-
-       call nc_check(nf90_def_dim(file_id, 'X', dimsx, xdim_id))
-
-       arrdims = (/ xdim_id/)
-
-       call nc_check(nf90_def_var(file_id,varname,NF90_REAL,arrdims,array_id))
-
-       call nc_check(nf90_put_att(file_id, array_id, "units", units))
-
-       call nc_check(nf90_enddef(file_id))
-
-       !Write out the values
-       call nc_check(nf90_put_var(file_id, array_id, var,start=start, count=varcount))
-
-       call nc_check(nf90_close(file_id))
-     end subroutine
-
-     subroutine write_netcdf_1d_non_met_data_real_new(var,varname,filename,units,x_dim)
+     subroutine write_netcdf_1d_non_met_data_real(var,varname,filename,units,x_dim)
        real(kind=dp), intent(in)    :: var(:)
        character(len=*), intent(in) :: varname
        character(len=*), intent(in) :: filename
@@ -1585,13 +1494,16 @@ module mod_io
 
        call nc_check(nf90_close(file_id),message='write_netcdf_1d_non_met_data_real nf90_close')
      end subroutine
- 
-     subroutine write_netcdf_1d_non_met_data_real_new_double(var,varname,filename,units,x_dim)
+
+     subroutine write_netcdf_1d_non_met_data_real_shared_dim(var,varname,filename,units,x_dim,create_dim)
        real(kind=dp), intent(in)    :: var(:)
+
        character(len=*), intent(in) :: varname
        character(len=*), intent(in) :: filename
        character(len=*), intent(in) :: units
        character(len=*), intent(in) :: x_dim
+
+       logical, intent(in)          :: create_dim
 
        integer, parameter :: numdims=1
        integer :: dimsx,dimsy
@@ -1615,11 +1527,15 @@ module mod_io
           call nc_check(nf90_redef(file_id),message='write_netcdf_1d_non_met_data_real nf_redef')
        endif
 
-       call nc_check(nf90_def_dim(file_id, x_dim, dimsx, xdim_id),message='write_netcdf_1d_non_met_data_real nf90_def_dim')
+       if(create_dim) then
+         call nc_check(nf90_def_dim(file_id, x_dim, dimsx, xdim_id),message='write_netcdf_1d_non_met_data_real nf90_def_dim')
+       else
+         call nc_check(nf90_inq_dimid(file_id, x_dim,xdim_id),message='write_netcdf_1d_non_met_data_real nf90_inq_dimid')
+       endif
 
        arrdims = (/ xdim_id/)
 
-       call nc_check(nf90_def_var(file_id,varname,NF90_DOUBLE,arrdims,array_id),message='write_netcdf_1d_non_met_data_real nf90_def_var')
+       call nc_check(nf90_def_var(file_id,varname,NF90_REAL,arrdims,array_id),message='write_netcdf_1d_non_met_data_real nf90_def_var')
 
        call nc_check(nf90_put_att(file_id, array_id, "units", units),message='write_netcdf_1d_non_met_data_real nf90_put_att')
 
@@ -1633,7 +1549,6 @@ module mod_io
 
      subroutine write_netcdf_2d_reservoir_matrices_mpi(mpi_res,var,varname,filename,units)
        use mpi
-       use netcdf
 
        use mod_utilities, only : mpi_type, reservoir_type
 
@@ -1720,6 +1635,36 @@ module mod_io
         return
      end subroutine
 
+     subroutine read_netcdf_1d_dp_opened(varname,ncid,var)
+        character(len=*), intent(in) :: varname
+        integer, intent(in)          :: ncid
+
+        real(kind=dp), allocatable, intent(out) :: var(:)
+
+        !Parmeter
+        integer, parameter :: numofdims = 1!We can assume its a 1d variable
+
+        !Local netcdf variables
+        integer :: varid
+
+        integer :: dimids(numofdims), dim_length(numofdims)
+
+        integer :: i
+
+        call nc_check(nf90_inq_varid(ncid,varname,varid))
+
+        call nc_check(nf90_inquire_variable(ncid,varid,dimids=dimids))
+
+        do i=1,numofdims
+           call nc_check(nf90_inquire_dimension(ncid,dimids(i),len=dim_length(i)))
+        enddo
+
+        allocate(var(dim_length(1)))
+
+        call nc_check(nf90_get_var(ncid,varid,var))
+        return
+     end subroutine
+
      subroutine read_netcdf_1d_int(varname,filename,var)
         character(len=*), intent(in) :: varname
         character(len=*), intent(in) :: filename
@@ -1754,8 +1699,37 @@ module mod_io
         return
      end subroutine
 
+     subroutine read_netcdf_1d_int_opened(varname,ncid,var)
+        character(len=*), intent(in) :: varname
+        integer, intent(in)          :: ncid
+
+        integer, allocatable, intent(out) :: var(:)
+
+        !Parmeter
+        integer, parameter :: numofdims = 1!We can assume its a 1d variable
+
+        !Local netcdf variables
+        integer :: varid
+
+        integer :: dimids(numofdims), dim_length(numofdims)
+
+        integer :: i
+
+        call nc_check(nf90_inq_varid(ncid,varname,varid))
+
+        call nc_check(nf90_inquire_variable(ncid,varid,dimids=dimids))
+
+        do i=1,numofdims
+           call nc_check(nf90_inquire_dimension(ncid,dimids(i),len=dim_length(i)))
+        enddo
+
+        allocate(var(dim_length(1)))
+
+        call nc_check(nf90_get_var(ncid,varid,var))
+        return
+     end subroutine
+
      subroutine nc_check(status,worker,message)
-         use netcdf
          
          integer, intent (in) :: status
          integer, intent(in), optional :: worker
@@ -1771,9 +1745,138 @@ module mod_io
 
     !-----------Parallel netcdf Routines----------!
 
+     subroutine read_era_data_parallel_opened(ncid,model_parameters,mpi_res,grid,era_data,start_time_arg,stride_arg)
+      use mpi
+
+      use mod_utilities, only : era_data_type, mpi_type, grid_type, model_parameters_type
+      use stringtype, only    : string
+
+      type(mpi_type), intent(in)              :: mpi_res
+      type(grid_type), intent(in)             :: grid
+      type(model_parameters_type), intent(in) :: model_parameters
+
+      integer, intent(in)                     :: ncid
+
+      type(era_data_type), intent(inout)      :: era_data
+
+      integer, intent(in), optional           :: start_time_arg, stride_arg
+
+      !Local netcdf stuff
+      integer :: start4d(4), start3d(3)
+      integer :: count4d(4), count3d(3)
+      integer :: stride4d(4), stride3d(3)
+      integer :: varid
+      integer :: dimids(4), dim_length(4)
+      integer :: i,j
+      integer :: start_time, stride
+
+      integer, parameter :: maxnum_of_dims=4
+      integer, parameter :: num_of_era_vars=5
+
+      type(string) :: era_var_names(num_of_era_vars)
+
+      if(present(start_time_arg)) then
+        start_time = start_time_arg
+      else
+        start_time = 1
+      endif
+
+      if(present(stride_arg)) then
+        stride = stride_arg
+      else
+        stride = 1
+      endif
+     
+      era_var_names(1)%str = 'Temperature'
+      era_var_names(2)%str = 'U-wind'
+      era_var_names(3)%str = 'V-wind'
+      era_var_names(4)%str = 'Specific_Humidity'
+      era_var_names(5)%str = 'logp'
+
+      do i=1, num_of_era_vars-1
+         call nc_check(nf90_inq_varid(ncid,era_var_names(i)%str,varid))
+
+         !call nc_check(nf90_var_par_access(ncid, varid, nf90_collective))
+
+         call nc_check(nf90_inquire_variable(ncid,varid,dimids=dimids))
+
+
+         if(i == 1) then
+           do j=1,maxnum_of_dims
+              call nc_check(nf90_inquire_dimension(ncid,dimids(j),len=dim_length(j)))
+           enddo
+           !lets allocate grid4
+           !allocate(era_data%eravariables(num_of_era_vars-1,grid%inputxchunk,grid%inputychunk,grid%inputzchunk,dim_length(4)/stride))
+           allocate(era_data%eravariables(num_of_era_vars-1,grid%inputxchunk,grid%inputychunk,zgrid,dim_length(4)/stride))
+         endif
+
+         !check if its a periodicboundary or not
+         if(grid%periodicboundary) then
+           !Do stuff
+           !start4d =  [integer::
+           !grid%input_xstart,grid%input_ystart,grid%input_zstart,start_time]
+           !count4d =  [integer::
+           !xgrid-grid%input_xstart+1,grid%inputychunk,grid%inputzchunk,dim_length(4)/stride]
+           start4d =  [integer:: grid%input_xstart,grid%input_ystart,1,start_time]
+           count4d =  [integer:: xgrid-grid%input_xstart+1,grid%inputychunk,zgrid,dim_length(4)/stride]
+           stride4d = [integer:: 1,1,1,stride]
+  
+           call nc_check(nf90_get_var(ncid,varid,era_data%eravariables(i,1:(xgrid-(grid%input_xstart-1)),:,:,:),start=start4d,count=count4d))!,stride=stride4d),mpi_res%proc_num,'first')
+
+           !start4d = [integer::
+           !1,grid%input_ystart,grid%input_zstart,start_time]
+           !count4d = [integer::
+           !grid%input_xend,grid%inputychunk,grid%inputzchunk,dim_length(4)/stride]
+           start4d = [integer:: 1,grid%input_ystart,1,start_time]
+           count4d = [integer:: grid%input_xend,grid%inputychunk,zgrid,dim_length(4)/stride]
+
+           call nc_check(nf90_get_var(ncid,varid,era_data%eravariables(i,(xgrid-(grid%input_xstart-1))+1:grid%inputxchunk,:,:,:),start=start4d,count=count4d))!,stride=stride4d),mpi_res%proc_num,'second')
+         else
+           !start4d = [integer::
+           !grid%input_xstart,grid%input_ystart,grid%input_zstart,start_time]
+           !count4d = [integer::
+           !grid%inputxchunk,grid%inputychunk,grid%inputzchunk,dim_length(4)/stride]
+           start4d = [integer:: grid%input_xstart,grid%input_ystart,1,start_time]
+           count4d = [integer:: grid%inputxchunk,grid%inputychunk,zgrid,dim_length(4)/stride]
+           stride4d = [integer:: 1,1,1,stride]
+
+           call nc_check(nf90_get_var(ncid,varid,era_data%eravariables(i,:,:,:,:),start=start4d,count=count4d))!,stride=stride4d))
+        endif
+      enddo
+
+      !Time to do logp
+      call nc_check(nf90_inq_varid(ncid,era_var_names(num_of_era_vars)%str,varid))
+
+      !call nc_check(nf90_var_par_access(ncid, varid, nf90_collective))
+
+      allocate(era_data%era_logp(grid%inputxchunk,grid%inputychunk,dim_length(4)/stride))
+
+      if(grid%periodicboundary) then
+
+        start3d = [integer:: grid%input_xstart,grid%input_ystart,start_time]
+        count3d = [integer:: xgrid-grid%input_xstart+1,grid%inputychunk,dim_length(4)/stride]
+        stride3d = [integer:: 1,1,stride]
+
+        call nc_check(nf90_get_var(ncid,varid,era_data%era_logp(1:(xgrid-(grid%input_xstart-1)),:,:),start=start3d,count=count3d))!,stride=stride3d))
+
+        start3d = [integer:: 1,grid%input_ystart,start_time]
+        count3d = [integer:: grid%input_xend,grid%inputychunk,dim_length(4)/stride]
+
+
+        call nc_check(nf90_get_var(ncid,varid,era_data%era_logp((xgrid-(grid%input_xstart-1))+1:grid%inputxchunk,:,:),start=start3d,count=count3d))!,stride=stride3d))
+
+      else
+        start3d = [integer:: grid%input_xstart,grid%input_ystart,start_time]
+        count3d = [integer:: grid%inputxchunk,grid%inputychunk,dim_length(4)/stride]
+        stride3d = [integer:: 1,1,stride]
+
+        call nc_check(nf90_get_var(ncid,varid,era_data%era_logp,start=start3d,count=count3d))!,stride=stride3d))
+      endif
+
+    end subroutine
+
     subroutine read_era_data_parallel(filename,model_parameters,mpi_res,grid,era_data,start_time_arg,stride_arg)
       use mpi
-      use netcdf
 
       use mod_utilities, only : era_data_type, mpi_type, grid_type, model_parameters_type
       use stringtype, only    : string
@@ -1849,9 +1952,6 @@ module mod_io
            count4d =  [integer:: xgrid-grid%input_xstart+1,grid%inputychunk,zgrid,dim_length(4)/stride]
            stride4d = [integer:: 1,1,1,stride]
 
-           print *, 'start4d_1',start4d,mpi_res%proc_num
-           print *, 'count4d_1',count4d,mpi_res%proc_num
-       
            call nc_check(nf90_get_var(ncid,varid,era_data%eravariables(i,1:(xgrid-(grid%input_xstart-1)),:,:,:),start=start4d,count=count4d))!,stride=stride4d),mpi_res%proc_num,'first')
 
            !start4d = [integer:: 1,grid%input_ystart,grid%input_zstart,start_time]
@@ -1859,8 +1959,11 @@ module mod_io
            start4d = [integer:: 1,grid%input_ystart,1,start_time]
            count4d = [integer:: grid%input_xend,grid%inputychunk,zgrid,dim_length(4)/stride]
 
-           print *, 'start4d_2',start4d,mpi_res%proc_num
-           print *, 'count4d_2',count4d,mpi_res%proc_num
+           !TODO NOTE count4d or xgrid-(grid%input_xstart-1))+1 or something is
+           !broke when using 4608 regions and overlap of 2
+           print *,'start4d',start4d
+           print *,'count4d',count4d
+           print *, 'shape(era_data%eravariables(i,(xgrid-(grid%input_xstart-1))+1:grid%inputxchunk,:,:,:))',shape(era_data%eravariables(i,(xgrid-(grid%input_xstart-1))+1:grid%inputxchunk,:,:,:))
            call nc_check(nf90_get_var(ncid,varid,era_data%eravariables(i,(xgrid-(grid%input_xstart-1))+1:grid%inputxchunk,:,:,:),start=start4d,count=count4d))!,stride=stride4d),mpi_res%proc_num,'second')    
          else
            !start4d = [integer:: grid%input_xstart,grid%input_ystart,grid%input_zstart,start_time]
@@ -1907,7 +2010,6 @@ module mod_io
    
     subroutine read_era_data_parallel_old(filename,mpi_res,grid,era_data)
       use mpi
-      use netcdf
 
       use mod_utilities, only : era_data_type, mpi_type, grid_type, reservoir_type
       use stringtype, only    : string
@@ -1996,7 +2098,6 @@ module mod_io
 
     subroutine read_speedy_data_parallel_old(filename,mpi_res,grid,speedy_data)
       use mpi
-      use netcdf
 
       use mod_utilities, only : speedy_data_type, mpi_type, grid_type
       use stringtype, only    : string
@@ -2063,7 +2164,6 @@ module mod_io
 
     subroutine read_speedy_data_parallel(filename,mpi_res,grid,speedy_data,start_time_arg,stride_arg)
       use mpi
-      use netcdf
 
       use mod_utilities, only : speedy_data_type, mpi_type, grid_type
       use stringtype, only    : string
@@ -2309,7 +2409,6 @@ module mod_io
    
    subroutine read_prediction_local_region_vert_level_mpi(grid,model_parameters,mpi_res,grid4d,grid2d,timestep,filename)
       use mpi
-      use netcdf
 
       use mod_utilities, only : era_data_type, mpi_type, grid_type, model_parameters_type
       use stringtype, only    : string
@@ -2604,7 +2703,6 @@ module mod_io
 
     subroutine read_3d_file_parallel(filename,varname,mpi_res,grid,var3d,start_time_arg,stride_arg,time_length)
       use mpi
-      use netcdf
 
       use mod_utilities, only : speedy_data_type, mpi_type, grid_type
       use stringtype, only    : string
@@ -2694,7 +2792,6 @@ module mod_io
       !need it but in order for parallel io to work in netcdf all processors
       !need to open the file)
       use mpi
-      use netcdf
 
       use mod_utilities, only : speedy_data_type, mpi_type, grid_type
       use stringtype, only    : string
@@ -2750,7 +2847,6 @@ module mod_io
 
     subroutine read_prediction_local_model_vert_level_mpi(grid,model_parameters,mpi_res,grid4d,grid2d,timestep,filename)
       use mpi
-      use netcdf
 
       use mod_utilities, only : era_data_type, mpi_type, grid_type, model_parameters_type
       use stringtype, only    : string
@@ -2822,7 +2918,7 @@ module mod_io
       character(len=:), allocatable :: file_path
       character(len=4) :: worker_char
       character(len=1) :: height_char
-      character(len=:), allocatable :: filename
+      character(len=:), allocatable :: filename 
 
       integer :: ncid
 
@@ -2833,7 +2929,7 @@ module mod_io
       write(height_char,'(i0.1)') grid%level_index
 
       filename = file_path//'worker_'//worker_char//'_level_'//height_char//'_'//trim(model_parameters%trial_name)//'.nc'
-
+      
       print *, 'reservoir%assigned_region',reservoir%assigned_region, filename
       call nc_check(nf90_open(filename, nf90_nowrite, ncid))
 
@@ -2841,18 +2937,18 @@ module mod_io
       call read_netcdf_2d_dp_opened('win',ncid,reservoir%win)
 
       print *, 'reading wout'
-      call read_netcdf_2d_dp_opened('wout',ncid,reservoir%wout)
+      call read_netcdf_2d_dp_opened('wout',ncid,reservoir%wout) 
 
       print *, 'reading rows'
       call read_netcdf_1d_int_opened('rows',ncid,reservoir%rows)
-
+ 
       print *, 'reading cols'
       call read_netcdf_1d_int_opened('cols',ncid,reservoir%cols)
 
       call read_netcdf_1d_dp_opened('vals',ncid,reservoir%vals)
 
       call read_netcdf_1d_dp_opened('mean',ncid,grid%mean)
-
+ 
       call read_netcdf_1d_dp_opened('std',ncid,grid%std)
 
       call nc_check(nf90_close(ncid))
@@ -2906,99 +3002,24 @@ module mod_io
 
         reservoir%sst_bool_input = .True.
         reservoir%sst_bool_prediction = .True.
-      else
+      else 
         reservoir%sst_bool_input = .False.
         reservoir%sst_bool_prediction = .False.
-      endif
+      endif 
     end subroutine
 
-    subroutine read_netcdf_2d_dp_opened(varname,ncid,var)
-        character(len=*), intent(in) :: varname
-        integer, intent(in)          :: ncid
+    subroutine open_netcdf_file_parallel(filename,mpi_res,ncid) 
+      use mpi
 
-        real(kind=dp), allocatable, intent(out) :: var(:,:)
+      use mod_utilities, only : mpi_type
 
-        !Parmeter
-        integer, parameter :: numofdims = 2 !We can assume its a 2d variable
+      type(mpi_type), intent(in)   :: mpi_res
 
-        !Local netcdf variables
-        integer :: varid
+      character(len=*), intent(in) :: filename
 
-        integer :: dimids(numofdims), dim_length(numofdims)
+      integer, intent(out)         :: ncid
 
-        integer :: i
-
-        call nc_check(nf90_inq_varid(ncid,varname,varid))
-
-        call nc_check(nf90_inquire_variable(ncid,varid,dimids=dimids))
-
-        do i=1,numofdims
-           call nc_check(nf90_inquire_dimension(ncid,dimids(i),len=dim_length(i)))
-        enddo
-
-        allocate(var(dim_length(1),dim_length(2)))
-
-        call nc_check(nf90_get_var(ncid,varid,var))
-        return
-     end subroutine
-
-    subroutine read_netcdf_1d_dp_opened(varname,ncid,var)
-        character(len=*), intent(in) :: varname
-        integer, intent(in)          :: ncid
-
-        real(kind=dp), allocatable, intent(out) :: var(:)
-
-        !Parmeter
-        integer, parameter :: numofdims = 1!We can assume its a 1d variable
-
-        !Local netcdf variables
-        integer :: varid
-
-        integer :: dimids(numofdims), dim_length(numofdims)
-
-        integer :: i
-
-        call nc_check(nf90_inq_varid(ncid,varname,varid))
-
-        call nc_check(nf90_inquire_variable(ncid,varid,dimids=dimids))
-
-        do i=1,numofdims
-           call nc_check(nf90_inquire_dimension(ncid,dimids(i),len=dim_length(i)))
-        enddo
-
-        allocate(var(dim_length(1)))
-
-        call nc_check(nf90_get_var(ncid,varid,var))
-        return
-     end subroutine
-
-     subroutine read_netcdf_1d_int_opened(varname,ncid,var)
-        character(len=*), intent(in) :: varname
-        integer, intent(in)          :: ncid
-
-        integer, allocatable, intent(out) :: var(:)
-
-        !Parmeter
-        integer, parameter :: numofdims = 1!We can assume its a 1d variable
-
-        !Local netcdf variables
-        integer :: varid
-
-        integer :: dimids(numofdims), dim_length(numofdims)
-
-        integer :: i
-
-        call nc_check(nf90_inq_varid(ncid,varname,varid))
-
-        call nc_check(nf90_inquire_variable(ncid,varid,dimids=dimids))
-
-        do i=1,numofdims
-           call nc_check(nf90_inquire_dimension(ncid,dimids(i),len=dim_length(i)))
-        enddo
-
-        allocate(var(dim_length(1)))
-
-        call nc_check(nf90_get_var(ncid,varid,var))
-        return
-     end subroutine
+      call nc_check(nf90_open(filename, IOR(NF90_NOWRITE, NF90_MPIIO), ncid,comm=mpi_res%mpi_world, info=MPI_INFO_NULL))
+      print *, 'ncid',ncid
+    end subroutine 
 end module mod_io

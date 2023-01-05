@@ -1,7 +1,8 @@
 module speedy_res_interface
     
    use mod_utilities, only : dp, speedy_data_type, era_data_type, state_vector_type, &
-                             reservoir_type, grid_type, model_parameters_type
+                             reservoir_type, grid_type, model_parameters_type, &
+                             opened_netcdf_type
    use mod_atparam, only : ix,il,kx
    use mod_physvar, only : ug1, vg1, tg1, qg1, phig1, pslg1
    use mod_tsteps, only : currentstep
@@ -243,6 +244,197 @@ module speedy_res_interface
     ! enddo 
    !end subroutine 
    
+
+  subroutine read_era_netcdf_opened(reservoir,grid,model_parameters,start_year,end_year,era_data,netcdf_files,timestep_arg)
+     use mpires, only : mpi_res
+     use mod_io, only : read_era_data_parallel,read_3d_file_parallel, read_era_data_parallel_old, &
+                        read_3d_file_parallel_res, read_era_data_parallel_opened, &
+                        open_netcdf_file_parallel
+     use mod_calendar, only : numof_hours
+
+     type(reservoir_type), intent(inout)     :: reservoir
+     type(grid_type), intent(inout)          :: grid
+     type(opened_netcdf_type), intent(inout) :: netcdf_files(:)
+    
+     type(model_parameters_type), intent(in) :: model_parameters
+     
+
+     integer, intent(in)                     :: start_year, end_year
+
+     type(era_data_type), intent(inout)      :: era_data
+
+     integer, intent(in), optional           :: timestep_arg
+
+     integer :: year_i, month_i,start_month,end_month
+     integer :: numofhours, hour_counter, temp_length, temp_file_length
+     integer :: start_index, timestep
+
+     integer :: netcdf_files_counter 
+
+     type(era_data_type) :: era_data_temp
+
+     character(len=3) :: file_end='.nc'
+     character(len=7) :: file_begin = 'era_5_y'
+     !character(len=23) :: spectral_regrid_file  = '_regridded_spectral_mpi'
+     !character(len=14) :: regrid_mpi = '_regridded_mpi'
+     !character(len=18) :: regrid_mpi = '_regridded_mpi_new'
+     !character(len=24) :: regrid_mpi = '_regridded_mpi_fixed_var'
+     character(len=28) :: regrid_mpi = '_regridded_mpi_fixed_var_gcc'
+     character(len=2) :: mid_file='_y'
+     character(len=1) :: month_1
+     character(len=2) :: month_2
+     character(len=4) :: year
+     character(len=:), allocatable :: file_path
+     character(len=:), allocatable :: regrid_file_name
+     character(len=:), allocatable :: spectral_regrid_file_name
+     character(len=:), allocatable :: format_month
+     character(len=:), allocatable :: month
+     character(len=:), allocatable :: tisr_file
+     character(len=:), allocatable :: sst_file
+     character(len=:), allocatable :: sst_climo_file
+     character(len=:), allocatable :: precip_file
+
+     !-----------Troy stuff ---------------!
+
+     if(present(timestep_arg)) then
+       timestep = timestep_arg
+     else
+       timestep = model_parameters%timestep
+     endif
+
+     start_month = 1
+     end_month = 12
+
+     call numof_hours(start_year,end_year,numofhours)
+
+
+     allocate(era_data%eravariables(numofspeedyvars,grid%inputxchunk,grid%inputychunk,grid%inputzchunk,numofhours))
+     allocate(era_data%era_logp(grid%inputxchunk,grid%inputychunk,numofhours))
+
+
+     if(reservoir%tisr_input_bool) then
+       allocate(era_data%era_tisr(grid%inputxchunk,grid%inputychunk,numofhours))
+     endif
+
+     if(reservoir%sst_bool) then
+       allocate(era_data%era_sst(grid%inputxchunk,grid%inputychunk,numofhours+1))
+     endif
+
+     if(reservoir%sst_climo_bool) then
+       allocate(era_data%era_sst_climo(grid%inputxchunk,grid%inputychunk,numofhours+1))
+     endif
+
+     if(reservoir%precip_bool) then
+       allocate(era_data%era_precip(grid%inputxchunk,grid%inputychunk,numofhours))
+     endif
+
+
+     !print *, numofhours
+     hour_counter = 1
+     netcdf_files_counter = 0
+     print *, 'herhe'
+     print *, 'start_year,end_year',start_year,end_year
+     do year_i=start_year,end_year
+         write(year,'(I4)') year_i
+
+         file_path = '/scratch/user/troyarcomano/ERA_5/'//year//'/'
+         regrid_file_name = file_path//file_begin//year//regrid_mpi//file_end
+
+         print *, 'regrid_file_name',regrid_file_name
+         print *, 'callimng read_era_data_parallel'
+
+         netcdf_files_counter = netcdf_files_counter + 1 
+         if(netcdf_files(netcdf_files_counter)%is_opened) then 
+           print *, 'netcdf_files(netcdf_files_counter)%ncid',netcdf_files(netcdf_files_counter)%ncid
+           call read_era_data_parallel_opened(netcdf_files(netcdf_files_counter)%ncid,model_parameters,mpi_res,grid,era_data_temp,1,1)
+         else 
+           netcdf_files(netcdf_files_counter)%filename = regrid_file_name
+           call open_netcdf_file_parallel(regrid_file_name,mpi_res,netcdf_files(netcdf_files_counter)%ncid)
+
+           netcdf_files(netcdf_files_counter)%is_opened = .True.
+           print *, 'netcdf_files(netcdf_files_counter)%ncid',netcdf_files(netcdf_files_counter)%ncid
+
+           call read_era_data_parallel_opened(netcdf_files(netcdf_files_counter)%ncid,model_parameters,mpi_res,grid,era_data_temp,1,1)
+         endif  
+
+         if(reservoir%assigned_region == 954) print *, 'era_data_temp%eravariables(4,2,2,:,1)', era_data_temp%eravariables(4,2,2,:,1)
+
+         temp_length = size(era_data_temp%eravariables,5)!/timestep
+
+         era_data%eravariables(:,:,:,:,hour_counter:temp_length+hour_counter-1) = era_data_temp%eravariables(:,:,:,grid%input_zstart:grid%input_zend,:)!,start_index:temp_file_length:timestep)
+         era_data%era_logp(:,:,hour_counter:temp_length+hour_counter-1) = era_data_temp%era_logp(:,:,:)!,start_index:temp_file_length:timestep)
+
+         if(reservoir%tisr_input_bool) then
+           tisr_file = file_path//'toa_incident_solar_radiation_'//year//'_regridded_classic4.nc'
+           if(model_parameters%irank == 0) print *, tisr_file
+           call read_3d_file_parallel(tisr_file,'tisr',mpi_res,grid,era_data_temp%era_tisr,1,1)
+           era_data%era_tisr(:,:,hour_counter:temp_length+hour_counter-1) = era_data_temp%era_tisr(:,:,:)!,start_index:temp_file_length:timestep)
+         endif
+
+         if(reservoir%precip_bool) then
+           precip_file = file_path//'era_5_y'//year//'_precip_regridded_mpi_fixed_var_gcc.nc'
+           if(model_parameters%irank == 0) print *, precip_file
+           call read_3d_file_parallel(precip_file,'tp',mpi_res,grid,era_data_temp%era_precip,1,1)
+           era_data%era_precip(:,:,hour_counter:temp_length+hour_counter-1) = era_data_temp%era_precip
+         endif
+
+         if(reservoir%sst_bool) then
+           sst_file = file_path//'era_5_y'//year//'_sst_regridded_fixed_var_gcc.nc'
+           if(model_parameters%irank == 0) print *, sst_file
+           call read_3d_file_parallel(sst_file,'sst',mpi_res,grid,era_data_temp%era_sst,1,1)
+           era_data%era_sst(:,:,hour_counter:temp_length+hour_counter-1) = era_data_temp%era_sst
+         endif
+
+         print *, 'reservoir%sst_climo_bool',reservoir%sst_climo_bool, reservoir%assigned_region
+         if(reservoir%sst_climo_bool) then
+           sst_climo_file = '/scratch/user/troyarcomano/ERA_5/regridded_era_sst_climatology1981_1999_gcc.nc'
+           if(year_i == start_year) then
+              if(model_parameters%irank == 0) print *, sst_climo_file
+              call read_3d_file_parallel(sst_climo_file,'sst',mpi_res,grid,era_data_temp%era_sst_climo,1,1)
+           endif
+           if(temp_length == 8784) then
+             era_data%era_sst_climo(:,:,hour_counter:hour_counter+1440 - 1) = era_data_temp%era_sst_climo(:,:,1:1440)
+             era_data%era_sst_climo(:,:,hour_counter+1441:hour_counter+1440+24) = era_data_temp%era_sst_climo(:,:,1441-24:1440)
+             era_data%era_sst_climo(:,:,hour_counter+1465:hour_counter+8784) = era_data_temp%era_sst_climo(:,:,1441:8760)
+           else
+             print *, 'shape(era_data%era_sst_climo(:,:,hour_counter:temp_length+hour_counter-1)) era_temp',shape(era_data%era_sst_climo(:,:,hour_counter:temp_length+hour_counter-1)),shape(era_data_temp%era_sst_climo)
+             era_data%era_sst_climo(:,:,hour_counter:temp_length+hour_counter-1) = era_data_temp%era_sst_climo
+           endif
+         endif
+
+         if(model_parameters%train_on_sst_anomalies .and. reservoir%sst_bool) then
+           if(temp_length == 8784) then
+             era_data%era_sst(:,:,hour_counter:hour_counter+1440 - 1) = era_data%era_sst(:,:,hour_counter:hour_counter+1440 - 1) - era_data%era_sst_climo(:,:,hour_counter:hour_counter+1440 - 1)
+             era_data%era_sst(:,:,hour_counter+1441:hour_counter+1440+24) = era_data%era_sst(:,:,hour_counter+1441:hour_counter+1440+24) - era_data%era_sst_climo(:,:,hour_counter+1441:hour_counter+1440+24)
+             era_data%era_sst(:,:,hour_counter+1465:hour_counter+8784) = era_data%era_sst(:,:,hour_counter+1465:hour_counter+8784) - era_data%era_sst_climo(:,:,hour_counter+1465:hour_counter+8784)
+           else
+             print *, 'shape,era_sst, era_sst_climo',shape(era_data%era_sst(:,:,hour_counter:temp_length+hour_counter-1)),shape(era_data%era_sst_climo(:,:,hour_counter:temp_length+hour_counter-1))
+             era_data%era_sst(:,:,hour_counter:temp_length+hour_counter-1) = era_data%era_sst(:,:,hour_counter:temp_length+hour_counter-1) - era_data%era_sst_climo(:,:,hour_counter:temp_length+hour_counter-1)
+           endif
+         endif
+
+         hour_counter = temp_length+hour_counter
+
+         deallocate(era_data_temp%eravariables)
+         deallocate(era_data_temp%era_logp)
+
+         if(allocated(era_data_temp%era_tisr)) then
+            deallocate(era_data_temp%era_tisr)
+         endif
+
+         if(allocated(era_data_temp%era_sst)) then
+            deallocate(era_data_temp%era_sst)
+         endif
+
+         if(allocated(era_data_temp%era_precip)) then
+           deallocate(era_data_temp%era_precip)
+         endif
+
+    enddo
+    if(allocated(era_data_temp%era_sst_climo)) then
+       deallocate(era_data_temp%era_sst_climo)
+    endif
+  end subroutine
 
   subroutine read_era(reservoir,grid,model_parameters,start_year,end_year,era_data,timestep_arg)
      use mpires, only : mpi_res

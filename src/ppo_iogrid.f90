@@ -569,7 +569,7 @@ subroutine iogrid(imode)
       elseif((minval(tgr) < 160.0).or.maxval(tgr) > 330.0) then
         print *,'Temperature is unsafe for SPEEDY, stopping hybrid prediction'
         internal_state_vector%is_safe_to_run_speedy = .False.
-      elseif((minval(qgr) < -6.0).or.maxval(qgr) > 26.0) then
+      elseif((minval(qgr) < -6.0).or.maxval(qgr) > 30.0) then !26.0) then
         print *,'Specific is unsafe for SPEEDY, stopping hybrid prediction'
         internal_state_vector%is_safe_to_run_speedy = .False.
       else
