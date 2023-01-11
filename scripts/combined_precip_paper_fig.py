@@ -341,8 +341,8 @@ def total_precip_bias_plot():
     startdate_hybrid = datetime(2007,1,1,0)
     enddate_hybrid  = datetime(2047,12,31,0)
     #ds_hybrid = xr.open_dataset('/scratch/user/troyarcomano/Predictions/Hybrid/hybrid_prediction_era6000_20_20_20_sigma0.5_beta_res0.001_beta_model_1.0_prior_0.0_overlap1_vertlevel_1_precipclimo_2kbias_10_year_then_platue_speedy_bc_atmo_no_ice_2k_sst_mean_20std_increase_trial_12_29_2006_00.nc')
-    ds_hybrid = xr.open_dataset('/scratch/user/troyarcomano/Predictions/Hybrid/hybrid_prediction_era6000_20_20_20_sigma0.5_beta_res0.001_beta_model_1.0_prior_0.0_overlap1_vertlevel_1_precip_epsilon0.001_multi_gaussian_noise_newest_version_32_processors_root_ssttrial_12_29_2006_00.nc') #hybrid_prediction_era6000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_1_vertlap_0_ocean_model_false_log_preciptrial_12_31_1999_00.nc')#
-
+    #ds_hybrid = xr.open_dataset('/scratch/user/troyarcomano/Predictions/Hybrid/hybrid_prediction_era6000_20_20_20_sigma0.5_beta_res0.001_beta_model_1.0_prior_0.0_overlap1_vertlevel_1_precip_epsilon0.001_multi_gaussian_noise_newest_version_32_processors_root_ssttrial_12_29_2006_00.nc') #hybrid_prediction_era6000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_1_vertlap_0_ocean_model_false_log_preciptrial_12_31_1999_00.nc')#
+    ds_hybrid = xr.open_dataset('/scratch/user/awikner/Predictions/Hybrid/hybrid_prediction_era6000_20_20_20_beta_res0.001_beta_model_1.0_prior_0.0_overlap1_vertlevel_1_precip_epsilon0.001_ocean_model7d_0.0001beta_sigma0.6_noise1_preciplognoise_dptrial_12_29_2006_00.nc')
     timestep = 6
 
     ds_speedy = xr.open_dataset('/scratch/user/troyarcomano/temp_storage/speedy_slab_ocean_original_sim.nc')
@@ -354,7 +354,7 @@ def total_precip_bias_plot():
     ds_observed = get_era5_precip_timeseries(startdate_climo,enddate_climo,1)
     ds_observed_annual_climo = ds_observed.groupby('Timestep.year').sum('Timestep')['tp']
 
-    ds_hybrid =  make_ds_time_dim(ds_hybrid,timestep,startdate)
+    ds_hybrid =  make_ds_time_dim(ds_hybrid,timestep,startdate_hybrid)
     ds_hybrid = ds_hybrid.sel(Timestep=slice(startdate_hybrid.strftime("%Y-%m-%d"),enddate_hybrid.strftime("%Y-%m-%d"))) #NOTE change back to start_climot end climato
     #ds_hybrid = ds_hybrid.sel(Timestep=slice(startdate_climo.strftime("%Y-%m-%d"),enddate_climo.strftime("%Y-%m-%d")))
 
