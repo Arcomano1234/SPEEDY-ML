@@ -105,8 +105,6 @@ module mpires
         trial_word = 'trial_'
         file_end = '.nc'
 
-
-      
         call get_current_time_delta_hour(calendar,res%model_parameters%traininglength+res%model_parameters%synclength+res%model_parameters%prediction_markers(res%model_parameters%current_trial_number))!*res%model_parameters%timestep+timestep*res%model_parameters%timestep)
 
         write(year,'(I4.4)') calendar%currentyear
@@ -222,7 +220,7 @@ module mpires
                               processor_decomposition_manual, getxyresextent, tile_full_grid_with_local_state_vec_res1d, standardize_state_vec_input, standardize_state_vec_res, &
                               tile_4d_to_local_state_input, tile_full_2d_grid_with_local_res, tile_4d_and_logp_to_local_state_input_slab
 
-        use mod_utilities, only : unstandardize_data, standardize_data_given_pars3d, standardize_data_given_pars1d
+        use mod_utilities, only : unstandardize_data, standardize_data_given_pars3d, standardize_data_given_pars1d, linear_increase_then_platue
 
         type(main_type), intent(inout) :: res
 
@@ -272,6 +270,14 @@ module mpires
         !then writes it out to the disk
 
         !print *, "starting receivesend", res%model_parameters%irank
+
+ 
+        if(res%model_parameters%non_stationary_ocn_climo) then
+           res%model_parameters%current_sst_bias = linear_increase_then_platue(0.0,res%model_parameters%final_sst_bias,real(res%model_parameters%timestep*timestep,kind=dp),real(24*365*10,kind=dp))
+        else 
+           res%model_parameters%current_sst_bias = 0.0_dp
+        endif 
+
         if(mpi_res%is_root) then
            allocate(wholegrid4d(res%model_parameters%full_predictvars,xgrid,ygrid,zgrid))
            allocate(wholegrid2d(xgrid,ygrid))
@@ -298,16 +304,20 @@ module mpires
            do i=1, res%model_parameters%num_of_regions_on_proc
               do j=1, res%model_parameters%num_vert_levels
 
-                 !print *, 'i,j,root,outvec',i,j,res%reservoir(i,j)%outvec
-  
                  call tile_full_grid_with_local_state_vec_res1d(res%model_parameters,res%model_parameters%region_indices(i),j,res%reservoir(i,j)%outvec,wholegrid4d,wholegrid2d,wholegrid_precip)
 
               enddo 
               if(ocean_model) then
                 if(res%reservoir_special(i,1)%sst_bool_prediction) then
                   call tile_full_2d_grid_with_local_res(res%model_parameters,res%model_parameters%region_indices(i),res%reservoir_special(i,1)%outvec,wholegrid_sst)
-                endif 
-              endif 
+                else
+                  allocate(temp1d( res%grid_special(i,1)%resxchunk * res%grid_special(i,1)%resychunk))
+                  temp1d = 272.0_dp
+                  call tile_full_2d_grid_with_local_res(res%model_parameters,res%model_parameters%region_indices(i),temp1d,wholegrid_sst)
+                  deallocate(temp1d)
+                endif
+              endif
+
            enddo
         endif
 
@@ -455,7 +465,6 @@ module mpires
              enddo 
            endif 
 
-           !NOTE TODO change back 
            if(ocean_model .and. .not. res%model_parameters%train_on_sst_anomalies) then
               where(wholegrid_sst < 272.0)
                  wholegrid_sst = 272.0_dp
@@ -485,7 +494,7 @@ module mpires
 
            file_path = '/scratch/user/troyarcomano/Predictions/Hybrid/'
            date_file = month//'_'//day//'_'//year//'_'//hour
-           hybrid_out_file_name = file_path//hybrid_out_root//res%model_parameters%trial_name//trial_word//date_file//file_end
+           hybrid_out_file_name = file_path//hybrid_out_root//res%model_parameters%trial_name//res%model_parameters%trial_name_extra_end//trial_word//date_file//file_end
 
            if(timestep == 1) then 
              res%model_parameters%prediction_file = hybrid_out_file_name
@@ -542,11 +551,10 @@ module mpires
         endif
 
         if(timestep == 1) then
-          !print *, 'calling write_truth_data', res%model_parameters%irank
+          call write_truth_data(res,timestep-1)
           call write_truth_data(res,timestep)
-          call write_truth_data(res,timestep+1)
         elseif(timestep == -99) then !else
-          call write_truth_data(res,timestep+1)
+          call write_truth_data(res,timestep)
         endif
 
       
@@ -563,6 +571,16 @@ module mpires
 
                    call standardize_state_vec_res(res%reservoir(i,j),res%grid(i,j),res%reservoir(i,j)%local_model)
                  endif 
+
+                 if(ocean_model) then 
+                   if(res%reservoir_special(i,1)%sst_bool_prediction) then
+  
+                      call tile_4d_and_logp_to_local_state_input_slab(res%model_parameters,res%model_parameters%region_indices(i),wholegrid_sst,res%reservoir_special(i,1)%feedback(res%grid_special(i,1)%sst_start:res%grid_special(i,1)%sst_end))
+
+                      call standardize_data_given_pars1d(res%reservoir_special(i,1)%feedback(res%grid_special(i,1)%sst_start:res%grid_special(i,1)%sst_end),res%grid_special(i,1)%mean(res%grid_special(i,1)%sst_mean_std_idx),res%grid_special(i,1)%std(res%grid_special(i,1)%sst_mean_std_idx)) 
+                   endif 
+
+                endif
               enddo
            enddo 
 
@@ -650,7 +668,6 @@ module mpires
                 call MPI_RECV(sendreceivedata,receive_size,MPI_DOUBLE_PRECISION,from,tag,mpi_res%mpi_world,MPI_STATUS_IGNORE,mpi_res%ierr)
 
                 res%reservoir(i,j)%feedback(1:res%reservoir(i,j)%reservoir_numinputs-res%reservoir(i,j)%tisr_size_input-res%reservoir(i,j)%sst_size_input) = sendreceivedata
-                !print *, res%model_parameters%irank,'receiving feedback from root for region, level',res%model_parameters%region_indices(i),j,res%reservoir(i,j)%feedback(res%grid(i,j)%precip_start:res%grid(i,j)%precip_end)
 
                 deallocate(sendreceivedata)
 
@@ -687,7 +704,6 @@ module mpires
 
                 if(res%reservoir_special(i,1)%sst_bool_prediction) then
                    call standardize_data_given_pars1d(sendreceivedata,res%grid_special(i,1)%mean(res%grid_special(i,1)%sst_mean_std_idx),res%grid_special(i,1)%std(res%grid_special(i,1)%sst_mean_std_idx))
-
                    res%reservoir_special(i,1)%feedback(res%grid_special(i,1)%sst_start:res%grid_special(i,1)%sst_end) = sendreceivedata
                 endif 
 
@@ -718,6 +734,9 @@ module mpires
                  if(res%reservoir(i,j)%sst_bool_input) then
                     res%reservoir(i,j)%feedback(res%grid(i,j)%sst_start:res%grid(i,j)%sst_end) = res%reservoir_special(i,1)%feedback(res%grid_special(i,1)%sst_start:res%grid_special(i,1)%sst_end) 
                  endif 
+                 if(res%model_parameters%non_stationary_ocn_climo .and. res%reservoir(i,j)%sst_bool_input) then
+                   call get_sst_by_date(res%reservoir(i,j),res%grid(i,j),res%model_parameters,timestep-1,res%reservoir(i,j)%feedback(res%grid(i,j)%sst_start:res%grid(i,j)%sst_end))
+                 endif 
               endif 
 
               if(res%reservoir(i,j)%logp_bool) then
@@ -737,8 +756,25 @@ module mpires
                  if(res%reservoir_special(i,1)%assigned_region == 10) print *,'averaged_atmo_input_vec(1,:)',res%reservoir_special(i,1)%averaged_atmo_input_vec(1,:)
                  res%reservoir_special(i,1)%feedback = sum(res%reservoir_special(i,1)%averaged_atmo_input_vec,dim=2)/(res%model_parameters%timestep_slab/res%model_parameters%timestep-1) !res%reservoir(i,j-1)%feedback(res%reservoir_special(i,1)%atmo_training_data_idx)
                  if(res%reservoir_special(i,1)%assigned_region == 10) print *,'res%reservoir_special(i,1)%feedback(1)',res%reservoir_special(i,1)%feedback(1)
+                 if(res%model_parameters%non_stationary_ocn_climo) then
+                   res%reservoir_special(i,1)%feedback(res%grid_special(i,1)%sst_start:res%grid_special(i,1)%sst_end) = res%reservoir(i,j-1)%feedback(res%grid(i,j-1)%sst_start:res%grid(i,j-1)%sst_end)
+                   temp2d = reshape(res%reservoir_special(i,1)%feedback(res%grid_special(i,1)%sst_start:res%grid_special(i,1)%sst_end),[res%grid_special(i,1)%inputxchunk,res%grid_special(i,1)%inputychunk])
+                   res%reservoir_special(i,1)%outvec = reshape(temp2d(res%grid_special(i,1)%tdata_xstart:res%grid_special(i,1)%tdata_xend,res%grid_special(i,1)%tdata_ystart:res%grid_special(i,1)%tdata_yend),(/res%grid_special(i,1)%resxchunk*res%grid_special(i,1)%resychunk/))
+                   res%reservoir_special(i,1)%outvec = res%reservoir_special(i,1)%outvec * res%grid_special(i,1)%std(res%grid_special(i,1)%sst_mean_std_idx) + res%grid_special(i,1)%mean(res%grid_special(i,1)%sst_mean_std_idx)
+                   deallocate(temp2d)
+                 endif 
               endif
            endif 
+   
+           if(res%reservoir(i,j-1)%assigned_region == 7 .and. ocean_model) then
+             print *, 'unstandardized sst feedback region 7',res%reservoir(i,j-1)%feedback(res%grid(i,j-1)%sst_start:res%grid(i,j-1)%sst_end)*res%grid(i,j-1)%std(res%grid(i,j-1)%sst_mean_std_idx) + res%grid(i,j-1)%mean(res%grid(i,j-1)%sst_mean_std_idx)
+            
+           endif 
+           if(res%reservoir(i,j-1)%assigned_region == 684 .and. ocean_model) then
+             print *, 'unstandardized sst feedback region 684',res%reservoir(i,j-1)%feedback(res%grid(i,j-1)%sst_start:res%grid(i,j-1)%sst_end)*res%grid(i,j-1)%std(res%grid(i,j-1)%sst_mean_std_idx) + res%grid(i,j-1)%mean(res%grid(i,j-1)%sst_mean_std_idx)
+
+           endif
+ 
         enddo 
         return
      end subroutine 
@@ -1069,10 +1105,412 @@ module mpires
            truth_out_file_name = file_path//truth_out_root//res%model_parameters%trial_name//trial_word//date_file//file_end
 
            print *, 'writing truth to',truth_out_file_name
-           call write_netcdf(res%model_parameters,wholegrid4d,wholegrid2d,timestep,truth_out_file_name)
+           call write_netcdf(res%model_parameters,wholegrid4d,wholegrid2d,timestep+1,truth_out_file_name)
        endif
 
        return
+     end subroutine
+
+     subroutine send_outvec_speedy_contrib(res,timestep)
+        use resdomain, only : tile_4d_and_logp_to_local_state_input, tile_4d_and_logp_state_vec_res1d, unstandardize_state_vec_input, tile_4d_and_logp_full_grid_to_local_res_vec, &
+                              processor_decomposition_manual, getxyresextent, tile_full_grid_with_local_state_vec_res1d, standardize_state_vec_input, standardize_state_vec_res, &
+                              tile_4d_to_local_state_input, tile_full_2d_grid_with_local_res, tile_4d_and_logp_to_local_state_input_slab
+
+        use mod_utilities, only : unstandardize_data, standardize_data_given_pars3d, standardize_data_given_pars1d, linear_increase_then_platue
+
+        type(main_type), intent(inout) :: res
+
+        integer, intent(in) :: timestep
+
+        real(kind=dp), allocatable :: wholegrid4d(:,:,:,:), wholegrid2d(:,:)
+        real(kind=dp), allocatable :: wholegrid_sst(:,:), wholegrid_precip(:,:)
+        
+        real(kind=dp), allocatable :: forecast_4d(:,:,:,:), forecast_2d(:,:)
+        real(kind=dp), allocatable :: sendreceivedata(:), temp4d(:,:,:,:), temp2d(:,:), temp3d(:,:,:), temp1d(:)
+
+        integer, parameter :: root=0
+        integer :: i,j, recieverequest, sendrequest, local_domain_size, receive_size
+        
+        integer :: localres_xstart,localres_xend,localres_ystart,localres_yend,localresxchunk,localresychunk
+        integer :: localres_zstart,localres_zend,localreszchunk
+        integer :: localinput_xstart,localinput_xend,localinput_ystart,localinput_yend,localinputxchunk,localinputychunk
+        integer :: to, from, tag, tag2
+        integer :: status(MPI_STATUS_SIZE)
+        integer :: counter
+        integer :: proc_num, number_of_regions
+        integer :: full_grid_num_2ds
+        
+        integer, allocatable :: region_indices(:)
+
+        logical, parameter :: setflag=.False.
+        logical            :: localpole,localperiodicboundary
+        logical, allocatable :: local_sst_flag(:)
+
+        character(len=3)  :: file_end
+        character(len=6)  :: trial_word
+        character(len=2)  :: month
+        character(len=4)  :: year
+        character(len=2)  :: day
+        character(len=2)  :: hour
+        character(len=:), allocatable :: date_file
+        character(len=:), allocatable :: hybrid_out_file_name
+        character(len=:), allocatable :: file_path
+        character(len=:), allocatable :: hybrid_out_root
+
+        !The receiving part of the routine
+        !Gets all of the ML contribs from each worker
+        !and gives it to the master node (worker == 0)
+        !Master node reconstructs the whole global set vector and
+        !then writes it out to the disk
+
+        if(mpi_res%is_root) then
+           allocate(wholegrid4d(res%model_parameters%full_predictvars,xgrid,ygrid,zgrid))
+           allocate(wholegrid2d(xgrid,ygrid))
+
+           allocate(forecast_4d(res%model_parameters%full_predictvars,xgrid,ygrid,zgrid))
+           allocate(forecast_2d(xgrid,ygrid))
+
+           if(res%model_parameters%precip_bool) then 
+             allocate(wholegrid_precip(xgrid,ygrid))
+             wholegrid_precip = 0.0_dp
+           endif 
+
+           !print *, 'root allocated full grids',res%model_parameters%irank
+           wholegrid4d = 0
+           wholegrid2d = 0
+
+           do i=1, res%model_parameters%num_of_regions_on_proc
+              do j=1, res%model_parameters%num_vert_levels
+
+                 call tile_full_grid_with_local_state_vec_res1d(res%model_parameters,res%model_parameters%region_indices(i),j,res%reservoir(i,j)%v_p,wholegrid4d,wholegrid2d,wholegrid_precip)
+
+              enddo 
+           enddo
+        endif
+
+        tag = 11
+        tag2 = 12
+
+        call MPI_Barrier(mpi_res%mpi_world, mpi_res%ierr)
+
+        counter = 1
+        if(.not.(mpi_res%is_root)) then
+           do i=1, res%model_parameters%num_of_regions_on_proc
+              do j=1, res%model_parameters%num_vert_levels
+                 local_domain_size = size(res%reservoir(i,j)%v_p)
+
+                 allocate(sendreceivedata(local_domain_size))
+
+                 sendreceivedata = res%reservoir(i,j)%v_p
+                 to = root
+
+                 tag = counter
+
+                 call MPI_SEND(sendreceivedata,local_domain_size,MPI_DOUBLE_PRECISION,to,tag,mpi_res%mpi_world,mpi_res%ierr)
+
+                 deallocate(sendreceivedata)
+
+                 counter = counter + 1
+              enddo 
+           enddo  
+        endif
+
+        call MPI_Barrier(mpi_res%mpi_world, mpi_res%ierr)
+        
+        if((mpi_res%is_root)) then
+          do proc_num=1,mpi_res%numprocs-1
+
+             !print *, 'root receiving from data from processor',proc_num
+             call processor_decomposition_manual(proc_num,mpi_res%numprocs,res%model_parameters%number_of_regions,region_indices)
+          
+             number_of_regions = size(region_indices)
+
+             counter = 1
+             do i=1, number_of_regions
+                do j=1, res%model_parameters%num_vert_levels
+
+                    !print *, 'root i,j',i,j
+                    call getsend_receive_size_res(res%model_parameters,region_indices(i),j,receive_size)
+
+                    allocate(sendreceivedata(receive_size))
+
+                    from = proc_num
+
+                    tag = counter
+
+                    !print *, 'from',from,'tag',tag
+                    call MPI_RECV(sendreceivedata,receive_size,MPI_DOUBLE_PRECISION,from,tag,mpi_res%mpi_world,MPI_STATUS_IGNORE,mpi_res%ierr)
+
+                    !print *, 'successfully received from',from,'tag',tag
+                    call tile_full_grid_with_local_state_vec_res1d(res%model_parameters,region_indices(i),j,sendreceivedata,wholegrid4d,wholegrid2d,wholegrid_precip)
+
+                    deallocate(sendreceivedata)
+
+                    counter = counter + 1
+                 enddo
+              enddo
+           enddo
+        endif
+
+        if(mpi_res%is_root) then
+           !Make sure we dont wander too far away from realistic values of
+           !specific humidity
+
+           !where(wholegrid4d(4,:,:,:) > 22)
+           !      wholegrid4d(4,:,:,:) = 22
+           !endwhere
+
+           !print *, 'root starting writing hybrid prediction'
+
+           if(.not. res%model_parameters%ml_only) then
+             hybrid_out_root='hybrid_prediction_era_speedy_contrib'
+           else
+             hybrid_out_root='ml_prediction_era'
+           endif 
+
+           trial_word = 'trial_'
+           file_end = '.nc'
+
+           call get_current_time_delta_hour(calendar,res%model_parameters%traininglength+res%model_parameters%synclength+res%model_parameters%prediction_markers(res%model_parameters%current_trial_number))
+           write(year,'(I4.4)') calendar%currentyear
+           write(month,'(I2.2)') calendar%currentmonth
+           write(day,'(I2.2)') calendar%currentday
+           write(hour,'(I2.2)') calendar%currenthour
+
+           file_path = '/scratch/user/troyarcomano/Predictions/Hybrid/'
+           date_file = month//'_'//day//'_'//year//'_'//hour
+           hybrid_out_file_name = file_path//hybrid_out_root//res%model_parameters%trial_name//res%model_parameters%trial_name_extra_end//trial_word//date_file//file_end
+
+           !Write the hybrid prediction out
+           print *, 'writing hybrid to', hybrid_out_file_name
+           print *, 'res%model_parameters%traininglength+res%model_parameters%synclength+res%model_parameters%prediction_markers(res%model_parameters%current_trial_number)',res%model_parameters%traininglength,res%model_parameters%synclength,res%model_parameters%prediction_markers(res%model_parameters%current_trial_number),res%model_parameters%current_trial_number
+ 
+           full_grid_num_2ds = 1
+
+           if(res%model_parameters%precip_bool) then
+             full_grid_num_2ds = full_grid_num_2ds + 1 
+           endif 
+
+           full_grid_num_2ds = 3 
+
+           allocate(temp3d(full_grid_num_2ds,xgrid,ygrid))
+         
+           temp3d = 0.0_dp
+
+           temp3d(1,:,:) = wholegrid2d
+
+
+           if(res%model_parameters%precip_bool) then 
+             temp3d(3,:,:) = wholegrid_precip
+           endif 
+
+           !print *, 'wholegrid_sst',wholegrid_sst
+           call write_netcdf(res%model_parameters,wholegrid4d,wholegrid2d,timestep,hybrid_out_file_name)
+           deallocate(temp3d)
+
+        endif
+        call MPI_Barrier(mpi_res%mpi_world, mpi_res%ierr)
+     end subroutine 
+
+     subroutine send_outvec_ml_contrib(res,timestep)
+        use resdomain, only : tile_4d_and_logp_to_local_state_input, tile_4d_and_logp_state_vec_res1d, unstandardize_state_vec_input, tile_4d_and_logp_full_grid_to_local_res_vec, &
+                              processor_decomposition_manual, getxyresextent, tile_full_grid_with_local_state_vec_res1d, standardize_state_vec_input, standardize_state_vec_res, &
+                              tile_4d_to_local_state_input, tile_full_2d_grid_with_local_res, tile_4d_and_logp_to_local_state_input_slab
+
+        use mod_utilities, only : unstandardize_data, standardize_data_given_pars3d, standardize_data_given_pars1d, linear_increase_then_platue
+
+        type(main_type), intent(inout) :: res
+
+        integer, intent(in) :: timestep
+
+        real(kind=dp), allocatable :: wholegrid4d(:,:,:,:), wholegrid2d(:,:)
+        real(kind=dp), allocatable :: wholegrid_sst(:,:), wholegrid_precip(:,:)
+        
+        real(kind=dp), allocatable :: forecast_4d(:,:,:,:), forecast_2d(:,:)
+        real(kind=dp), allocatable :: sendreceivedata(:), temp4d(:,:,:,:), temp2d(:,:), temp3d(:,:,:), temp1d(:)
+
+        integer, parameter :: root=0
+        integer :: i,j, recieverequest, sendrequest, local_domain_size, receive_size
+        
+        integer :: localres_xstart,localres_xend,localres_ystart,localres_yend,localresxchunk,localresychunk
+        integer :: localres_zstart,localres_zend,localreszchunk
+        integer :: localinput_xstart,localinput_xend,localinput_ystart,localinput_yend,localinputxchunk,localinputychunk
+        integer :: to, from, tag, tag2
+        integer :: status(MPI_STATUS_SIZE)
+        integer :: counter
+        integer :: proc_num, number_of_regions
+        integer :: full_grid_num_2ds
+        
+        integer, allocatable :: region_indices(:)
+
+        logical, parameter :: setflag=.False.
+        logical            :: localpole,localperiodicboundary
+        logical, allocatable :: local_sst_flag(:)
+
+        character(len=3)  :: file_end
+        character(len=6)  :: trial_word
+        character(len=2)  :: month
+        character(len=4)  :: year
+        character(len=2)  :: day
+        character(len=2)  :: hour
+        character(len=:), allocatable :: date_file
+        character(len=:), allocatable :: hybrid_out_file_name
+        character(len=:), allocatable :: file_path
+        character(len=:), allocatable :: hybrid_out_root
+
+        !The receiving part of the routine
+        !Gets all of the ML contribs from each worker
+        !and gives it to the master node (worker == 0)
+        !Master node reconstructs the whole global set vector and
+        !then writes it out to the disk
+
+        if(mpi_res%is_root) then
+           allocate(wholegrid4d(res%model_parameters%full_predictvars,xgrid,ygrid,zgrid))
+           allocate(wholegrid2d(xgrid,ygrid))
+
+           allocate(forecast_4d(res%model_parameters%full_predictvars,xgrid,ygrid,zgrid))
+           allocate(forecast_2d(xgrid,ygrid))
+
+           if(res%model_parameters%precip_bool) then 
+             allocate(wholegrid_precip(xgrid,ygrid))
+             wholegrid_precip = 0.0_dp
+           endif 
+
+           !print *, 'root allocated full grids',res%model_parameters%irank
+           wholegrid4d = 0
+           wholegrid2d = 0
+
+           do i=1, res%model_parameters%num_of_regions_on_proc
+              do j=1, res%model_parameters%num_vert_levels
+
+                 call tile_full_grid_with_local_state_vec_res1d(res%model_parameters,res%model_parameters%region_indices(i),j,res%reservoir(i,j)%v_ml,wholegrid4d,wholegrid2d,wholegrid_precip)
+
+              enddo 
+           enddo
+        endif
+
+        tag = 11
+        tag2 = 12
+
+        call MPI_Barrier(mpi_res%mpi_world, mpi_res%ierr)
+
+        counter = 1
+        if(.not.(mpi_res%is_root)) then
+           do i=1, res%model_parameters%num_of_regions_on_proc
+              do j=1, res%model_parameters%num_vert_levels
+                 local_domain_size = size(res%reservoir(i,j)%v_ml)
+
+                 allocate(sendreceivedata(local_domain_size))
+
+                 sendreceivedata = res%reservoir(i,j)%v_ml
+                 to = root
+
+                 tag = counter
+
+                 call MPI_SEND(sendreceivedata,local_domain_size,MPI_DOUBLE_PRECISION,to,tag,mpi_res%mpi_world,mpi_res%ierr)
+
+                 deallocate(sendreceivedata)
+
+                 counter = counter + 1
+              enddo 
+           enddo  
+        endif
+
+        call MPI_Barrier(mpi_res%mpi_world, mpi_res%ierr)
+        
+        if((mpi_res%is_root)) then
+          do proc_num=1,mpi_res%numprocs-1
+
+             !print *, 'root receiving from data from processor',proc_num
+             call processor_decomposition_manual(proc_num,mpi_res%numprocs,res%model_parameters%number_of_regions,region_indices)
+          
+             number_of_regions = size(region_indices)
+
+             counter = 1
+             do i=1, number_of_regions
+                do j=1, res%model_parameters%num_vert_levels
+
+                    !print *, 'root i,j',i,j
+                    call getsend_receive_size_res(res%model_parameters,region_indices(i),j,receive_size)
+
+                    allocate(sendreceivedata(receive_size))
+
+                    from = proc_num
+
+                    tag = counter
+
+                    !print *, 'from',from,'tag',tag
+                    call MPI_RECV(sendreceivedata,receive_size,MPI_DOUBLE_PRECISION,from,tag,mpi_res%mpi_world,MPI_STATUS_IGNORE,mpi_res%ierr)
+
+                    !print *, 'successfully received from',from,'tag',tag
+                    call tile_full_grid_with_local_state_vec_res1d(res%model_parameters,region_indices(i),j,sendreceivedata,wholegrid4d,wholegrid2d,wholegrid_precip)
+
+                    deallocate(sendreceivedata)
+
+                    counter = counter + 1
+                 enddo
+              enddo
+           enddo
+        endif
+
+        if(mpi_res%is_root) then
+           !Make sure we dont wander too far away from realistic values of
+           !specific humidity
+
+           !where(wholegrid4d(4,:,:,:) > 22)
+           !      wholegrid4d(4,:,:,:) = 22
+           !endwhere
+
+           !print *, 'root starting writing hybrid prediction'
+
+           if(.not. res%model_parameters%ml_only) then
+             hybrid_out_root='hybrid_prediction_era_ml_contrib'
+           else
+             hybrid_out_root='ml_prediction_era'
+           endif 
+
+           trial_word = 'trial_'
+           file_end = '.nc'
+
+           call get_current_time_delta_hour(calendar,res%model_parameters%traininglength+res%model_parameters%synclength+res%model_parameters%prediction_markers(res%model_parameters%current_trial_number))
+           write(year,'(I4.4)') calendar%currentyear
+           write(month,'(I2.2)') calendar%currentmonth
+           write(day,'(I2.2)') calendar%currentday
+           write(hour,'(I2.2)') calendar%currenthour
+
+           file_path = '/scratch/user/troyarcomano/Predictions/Hybrid/'
+           date_file = month//'_'//day//'_'//year//'_'//hour
+           hybrid_out_file_name = file_path//hybrid_out_root//res%model_parameters%trial_name//res%model_parameters%trial_name_extra_end//trial_word//date_file//file_end
+
+           !Write the hybrid prediction out
+           print *, 'writing hybrid to', hybrid_out_file_name
+           print *, 'res%model_parameters%traininglength+res%model_parameters%synclength+res%model_parameters%prediction_markers(res%model_parameters%current_trial_number)',res%model_parameters%traininglength,res%model_parameters%synclength,res%model_parameters%prediction_markers(res%model_parameters%current_trial_number),res%model_parameters%current_trial_number
+ 
+           full_grid_num_2ds = 1
+
+           if(res%model_parameters%precip_bool) then
+             full_grid_num_2ds = full_grid_num_2ds + 1 
+           endif 
+
+           full_grid_num_2ds = 3 
+
+           allocate(temp3d(full_grid_num_2ds,xgrid,ygrid))
+         
+           temp3d = 0.0_dp
+
+           temp3d(1,:,:) = wholegrid2d
+
+
+           if(res%model_parameters%precip_bool) then 
+             temp3d(3,:,:) = wholegrid_precip
+           endif 
+
+           !print *, 'wholegrid_sst',wholegrid_sst
+           call write_netcdf(res%model_parameters,wholegrid4d,wholegrid2d,timestep,hybrid_out_file_name)
+           deallocate(temp3d)
+
+        endif
+        call MPI_Barrier(mpi_res%mpi_world, mpi_res%ierr)
      end subroutine
 
      subroutine run_model(model_parameters,timestep,grid4d,grid2d,sst_grid,speedy_grid4d,speedy_grid2d)
@@ -1160,7 +1598,8 @@ module mpires
         internal_state_vector%ihour = calendar%currenthour
 
         !Slowly adding sst_bias over the whole run 
-        internal_state_vector%sst_bias = 0.0_dp!(2.0/(model_parameters%predictionlength/3))*(model_parameters%timestep*timestep)
+        internal_state_vector%sst_bias = model_parameters%current_sst_bias
+
         print *, 'timestep, internal_state_vector%sst_bias',timestep, internal_state_vector%sst_bias
 
         call agcm_main(1,1,internal_state_vector)  
@@ -1173,12 +1612,13 @@ module mpires
         !call write_netcdf(model_parameters,internal_state_vector%variables3d,internal_state_vector%logp,timestep,speedy_file)
         !call write_netcdf_speedy_full_mpi(timestep,model_parameters,speedy_file,mpi_res,internal_state_vector%variables3d,internal_state_vector%logp)
 
-        allocate(speedy_grid4d, source=internal_state_vector%variables3d)
-        allocate(speedy_grid2d, source=internal_state_vector%logp)
-
-        where(internal_state_vector%variables3d(4,:,:,:) < 0.000001) 
+        !NOTE moved this so it actually does something 9/8/22
+        where(internal_state_vector%variables3d(4,:,:,:) < 0.000001)
              internal_state_vector%variables3d(4,:,:,:) = 0.000001_dp
         endwhere
+
+        allocate(speedy_grid4d, source=internal_state_vector%variables3d)
+        allocate(speedy_grid2d, source=internal_state_vector%logp)
 
         if(internal_state_vector%is_safe_to_run_speedy .eqv. .False.) then
           model_parameters%run_speedy = .False.
@@ -1226,7 +1666,55 @@ module mpires
 
     var1d = reshape(reservoir%full_tisr(:,:,date_into_year_index),(/grid%inputxchunk*grid%inputychunk/))
 
-    !call standardize_data_given_pars1d(var1d,grid%mean(grid%tisr_mean_std_idx),grid%std(grid%tisr_mean_std_idx))
+  end subroutine
+
+  subroutine get_sst_by_date(reservoir,grid,model_parameters,timestep,var1d)
+    use mod_utilities, only : standardize_data_given_pars1d, reservoir_type, grid_type, model_parameters_type
+
+    use mod_calendar, only : numof_hours_into_year,get_current_time_delta_hour
+
+    use mod_io, only : read_3d_file_parallel
+
+    type(reservoir_type), intent(inout)     :: reservoir
+    type(grid_type), intent(inout)          :: grid
+    type(model_parameters_type), intent(in) :: model_parameters
+
+    integer, intent(in)                 :: timestep
+
+    real(kind=dp), intent(inout)        :: var1d(:)
+
+    !local
+    integer          :: date_into_year_index
+    integer          :: calendar365(12)
+    integer          :: i, imonth
+
+    calendar365 = (/31,28,31,30,31,30,31,31,30,31,30,31/)
+
+    call get_current_time_delta_hour(calendar,(model_parameters%traininglength+model_parameters%prediction_markers(model_parameters%current_trial_number)+model_parameters%synclength+timestep*model_parameters%timestep))
+
+    date_into_year_index = 0 
+    imonth = calendar%currentmonth
+    do i=1, imonth- 1
+         date_into_year_index = date_into_year_index + calendar365(i)
+    enddo
+
+    date_into_year_index = date_into_year_index + calendar%currentday
+
+    if(reservoir%assigned_region == 7) print *,'current date plus timestep',calendar%currentyear,calendar%currentmonth,calendar%currentday,calendar%currenthour,'date_into_year_index',date_into_year_index
+
+    var1d = reshape(reservoir%full_sst(:,:,date_into_year_index),(/grid%inputxchunk*grid%inputychunk/))
+
+    if(model_parameters%non_stationary_ocn_climo) then
+      var1d = var1d*grid%std(grid%sst_mean_std_idx) + grid%mean(grid%sst_mean_std_idx)
+ 
+      where(var1d > 273.0_dp) 
+        var1d = var1d + model_parameters%current_sst_bias
+      endwhere
+
+      if(reservoir%assigned_region == 7) print *, 'var1d',var1d
+      if(reservoir%assigned_region == 684) print *, 'var1d region 684',var1d
+      var1d = (var1d - grid%mean(grid%sst_mean_std_idx))/grid%std(grid%sst_mean_std_idx)
+    endif 
   end subroutine
 end module mpires
 

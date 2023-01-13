@@ -3,7 +3,7 @@ program main
   use mpi
   use, intrinsic :: ieee_arithmetic
 
-  use mpires, only : mpi_res, startmpi, distribute_prediction_marker, killmpi, predictionmpicontroller, sendrecievegrid
+  use mpires, only : mpi_res, startmpi, distribute_prediction_marker, killmpi, predictionmpicontroller, sendrecievegrid, send_outvec_ml_contrib, send_outvec_speedy_contrib
   use mod_reservoir, only : initialize_model_parameters, allocate_res_new, train_reservoir, start_prediction, initialize_prediction, predict, trained_reservoir_prediction, predict_ml
   use mod_slab_ocean_reservoir, only : initialize_slab_ocean_model, train_slab_ocean_model, get_training_data_from_atmo, initialize_prediction_slab, start_prediction_slab, predict_slab, predict_slab_ml, trained_ocean_reservoir_prediction
   use speedy_res_interface, only : startspeedy
@@ -17,7 +17,7 @@ program main
   integer :: standardizing_vars, i, j, k , t, prediction_num
 
   logical :: runspeedy = .False.
-  logical :: trained_model = .False.
+  logical :: trained_model = .True.
   logical :: slab_model
  
   real(kind=dp), allocatable :: test_state(:), test_feedback(:)
@@ -33,16 +33,13 @@ program main
 
   !Makes the object called res and declares all of the main parameters 
   call initialize_model_parameters(res%model_parameters,mpi_res%proc_num,mpi_res%numprocs)
-
+  
   !Do domain decomposition based off processors and do vertical localization of
   !reservoir
   call processor_decomposition(res%model_parameters)
 
   !Need this for each worker gets a new random seed
   call init_random_marker(33)
-
-  !print *, 'model_parameters%region_indices',res%model_parameters%irank,res%model_parameters%region_indices
-  !print *, 'irank, size(model_parameters%region_indices',res%model_parameters%irank, size(res%model_parameters%region_indices)
 
   !Allocate atmo3d reservoirs and any special ones 
   allocate(res%reservoir(res%model_parameters%num_of_regions_on_proc,res%model_parameters%num_vert_levels))
@@ -233,17 +230,13 @@ program main
            enddo
            !print *, 'mod((t-1)*res%model_parameters%timestep,res%model_parameters%timestep_slab)',mod((t-1)*res%model_parameters%timestep,res%model_parameters%timestep_slab)
            if(res%model_parameters%slab_ocean_model_bool) then
-             if(mod((t)*res%model_parameters%timestep,res%model_parameters%timestep_slab) == 0 .and. res%reservoir_special(i,1)%sst_bool_prediction) then
+             if(mod((t)*res%model_parameters%timestep,res%model_parameters%timestep_slab) == 0 .and. res%reservoir_special(i,1)%sst_bool_prediction .and. .not. res%model_parameters%non_stationary_ocn_climo ) then
                 if(res%reservoir_special(i,1)%assigned_region == 954) print *, 'calling predict slab'
                 !TODO rolling_average_over_a_period(grid,period)
                 !if( t > 28) then
                 !  res%reservoir_special(i,1)%local_model = res%reservoir_special(i,1)%outvec 
                 !endif 
                 if(res%model_parameters%ml_only_ocean) then
-                  !if(t*res%model_parameters%timestep < res%model_parameters%timestep_slab*2) then 
-                  !   res%reservoir_special(i,1)%saved_state = test_state!res%reservoir_special(i,1)%saved_state!test_state
-                  !   res%reservoir_special(i,1)%feedback = test_feedback!res%reservoir_special(i,1)%feedback!test_feedback
-                  !endif 
                   call predict_slab_ml(res%reservoir_special(i,1),res%model_parameters,res%grid_special(i,1),res%reservoir_special(i,1)%saved_state)
                 else
                   call predict_slab(res%reservoir_special(i,1),res%model_parameters,res%grid_special(i,1),res%reservoir_special(i,1)%saved_state,res%reservoir_special(i,1)%local_model)
@@ -262,6 +255,11 @@ program main
         if(mpi_res%is_root) print *, 'sending data and writing predictions','prediction_num prediction_num',prediction_num,'time',t
 
         call sendrecievegrid(res,t,slab_model)
+     
+        if(res%model_parameters%outvec_component_contribs) then
+           call send_outvec_ml_contrib(res,t)
+           call send_outvec_speedy_contrib(res,t)
+        endif 
 
         if(res%model_parameters%run_speedy .eqv. .False.) then
           exit
