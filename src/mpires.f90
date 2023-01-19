@@ -1658,9 +1658,16 @@ module mpires
 
     !local
     integer          :: date_into_year_index
+    integer          :: num_hours_365cal
+
+    num_hours_365cal = 24*365
 
     call get_current_time_delta_hour(calendar,(model_parameters%traininglength+model_parameters%prediction_markers(model_parameters%current_trial_number)+model_parameters%synclength+timestep*model_parameters%timestep))
     call numof_hours_into_year(calendar%currentyear,calendar%currentmonth,calendar%currentday,calendar%currenthour,date_into_year_index)
+
+    if(date_into_year_index > num_hours_365cal) then 
+      date_into_year_index = date_into_year_index - num_hours_365cal
+    endif 
 
     if(reservoir%assigned_region == 0) print *,'current date plus timestep',calendar%currentyear,calendar%currentmonth,calendar%currentday,calendar%currenthour,'date_into_year_index',date_into_year_index
 

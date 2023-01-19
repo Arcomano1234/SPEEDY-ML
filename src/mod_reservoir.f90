@@ -27,7 +27,7 @@ subroutine initialize_model_parameters(model_parameters,processor,num_of_procs)
    !model_parameters%trial_name = '6000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_4_vertlap_6_slab_ocean_model_true_precip_true'
    !'4000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_4_vertlap_2_full_timestep_1'
    !model_parameters%trial_name = '4000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_4_vertlap_2_full_test_climate_all_tisr_longer'
-   model_parameters%trial_name_extra_end = 'mpi_res_test_final_before_commit'!'climo_2kbias_10_year_then_platue_speedy_bc_atmo_no_ice_2k_sst_mean_20std_increase_'
+   model_parameters%trial_name_extra_end = 'no_climo_sst'!'climo_2kbias_10_year_then_platue_speedy_bc_atmo_no_ice_2k_sst_mean_20std_increase_'
 
    model_parameters%discardlength = 24*10!7
    model_parameters%traininglength =  227760 - 24*10 !- 40*24!166440 - 24*10  !87600*2+24*10!3+24*10!188280 !254040 !81600!188280!0!0!0!166600!81600 !00!58000!67000!77000
@@ -234,7 +234,7 @@ subroutine train_reservoir(reservoir,grid,model_parameters)
     grid%logp_bool = .True.
 
     reservoir%sst_bool = model_parameters%slab_ocean_model_bool
-    reservoir%sst_climo_bool = .True. !.False.
+    reservoir%sst_climo_bool = .False.!.True. !.False.
 
     reservoir%precip_input_bool = model_parameters%precip_bool
     reservoir%precip_bool = model_parameters%precip_bool
@@ -897,11 +897,11 @@ subroutine get_full_tisr(reservoir,model_parameters,grid)
    character(len=:), allocatable :: file_path
    character(len=:), allocatable :: tisr_file
  
-   file_path = '/scratch/user/troyarcomano/ERA_5/2012/'
-   tisr_file = file_path//'toa_incident_solar_radiation_2012_regridded_classic4.nc'
+   file_path = '/scratch/user/troyarcomano/ERA_5/2007/' !2012/'
+   tisr_file = file_path//'toa_incident_solar_radiation_2007_regridded_classic4.nc'
 
    call read_3d_file_parallel(tisr_file,'tisr',mpi_res,grid,reservoir%full_tisr,1,1)
-   print *, 'isr_mean_std_idx,grid%mean(grid%tisr_mean_std_idx),grid%std(grid%tisr_mean_std_idx)',grid%tisr_mean_std_idx,grid%mean(grid%tisr_mean_std_idx),grid%std(grid%tisr_mean_std_idx)
+   print *, 'tisr_mean_std_idx,grid%mean(grid%tisr_mean_std_idx),grid%std(grid%tisr_mean_std_idx)',grid%tisr_mean_std_idx,grid%mean(grid%tisr_mean_std_idx),grid%std(grid%tisr_mean_std_idx)
    call standardize_data_given_pars3d(reservoir%full_tisr,grid%mean(grid%tisr_mean_std_idx),grid%std(grid%tisr_mean_std_idx))
 
 end subroutine  
@@ -1458,7 +1458,7 @@ subroutine predict(reservoir,model_parameters,grid,x,local_model_in)
        reservoir%v_ml = matmul(reservoir%wout(:,reservoir%chunk_size_speedy+1:reservoir%chunk_size_speedy+reservoir%n),x_temp)
     endif 
       
-    if(reservoir%assigned_region == 954) then
+    if(reservoir%assigned_region == 954 .and. model_parameters%outvec_component_contribs) then
       print *,'reservoir%v_p',reservoir%v_p
       print *,'reservoir%v_ml',reservoir%v_ml
       print *,'reservoir%v_ml + reservoir%v_p',reservoir%v_ml + reservoir%v_p

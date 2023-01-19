@@ -758,8 +758,8 @@ subroutine get_full_tisr(reservoir,model_parameters,grid)
    character(len=:), allocatable :: file_path
    character(len=:), allocatable :: tisr_file
  
-   file_path = '/scratch/user/troyarcomano/ERA_5/2012/'
-   tisr_file = file_path//'toa_incident_solar_radiation_2012_regridded_classic4.nc'
+   file_path = '/scratch/user/troyarcomano/ERA_5/2007' !/2012/'
+   tisr_file = file_path//'toa_incident_solar_radiation_2007_regridded_classic4.nc'
 
    call read_3d_file_parallel(tisr_file,'tisr',mpi_res,grid,reservoir%full_tisr,1,1)
 
