@@ -395,7 +395,8 @@ subroutine get_prediction_data_from_atmo(reservoir,model_parameters,grid,reservo
    atmo_ocean_tstep_ratio = model_parameters%timestep_slab/model_parameters%timestep
 
    num_syncs = size(reservoir_atmo%predictiondata(:,1:size(reservoir_atmo%predictiondata,2):atmo_ocean_tstep_ratio),2)
-   allocate(reservoir%predictiondata(reservoir%reservoir_numinputs,num_syncs))
+
+   if(.not. allocated(reservoir%predictiondata)) allocate(reservoir%predictiondata(reservoir%reservoir_numinputs,num_syncs))
 
    print *, 'num_syncs',num_syncs
    print *, 'size(reservoir_atmo%predictiondata,2)',size(reservoir_atmo%predictiondata,2)
