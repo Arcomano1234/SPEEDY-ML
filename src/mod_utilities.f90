@@ -248,6 +248,9 @@ module mod_utilities
     !Save reservoir state for later use
     real(kind=dp), allocatable :: saved_state(:)
 
+    !Current reservoir state for later use
+    real(kind=dp), allocatable :: current_state(:)
+
     !TISR relievent 
     logical :: tisr_input_bool !This is the actual variable that determines
                                !which reservoir gets tisr. Just because

@@ -1579,10 +1579,12 @@ subroutine initialize_chunk_training(reservoir,model_parameters)
    allocate(reservoir%states(reservoir%n,reservoir%batch_size))
    allocate(reservoir%augmented_states(reservoir%n+reservoir%chunk_size_speedy,reservoir%batch_size))!prediction,reservoir%batch_size))
    allocate(reservoir%saved_state(reservoir%n))
+   allocate(reservoir%current_state(reservoir%n))
 
    reservoir%states_x_trainingdata_aug = 0.0_dp
    reservoir%states_x_states_aug = 0.0_dp
    reservoir%states = 0.0_dp
+   reservoir%current_state = 0.0_dp
    reservoir%augmented_states = 0.0_dp
 
 end subroutine
@@ -1792,7 +1794,7 @@ subroutine trained_reservoir_prediction(reservoir,model_parameters,grid)
     grid%logp_bool = .True.
 
     reservoir%sst_bool = model_parameters%slab_ocean_model_bool
-    reservoir%sst_climo_bool = .True. !.False.
+    reservoir%sst_climo_bool = .False. !.False.
 
     reservoir%precip_input_bool = model_parameters%precip_bool
     reservoir%precip_bool = model_parameters%precip_bool
