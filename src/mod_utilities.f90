@@ -98,6 +98,9 @@ module mod_utilities
      !Index of precip in the mean and std arrays 
      integer :: precip_mean_std_idx
 
+     !Index of oceanic heat content in the mean and std arrays
+     integer :: ohtc_mean_std_idx
+
      !Number of regions 
      integer :: number_of_regions
 
@@ -159,8 +162,8 @@ module mod_utilities
      !ocean heat content (ohtc) indices in u(t) where
      !u(atmos...logp...sst...sst_climo...tisr...othc)
      !This will only be for ocean reservoirs
-     integer :: othc_start
-     integer :: othc_end
+     integer :: ohtc_start
+     integer :: ohtc_end
   end type grid_type
 
   type reservoir_type
@@ -305,7 +308,6 @@ module mod_utilities
     integer :: num_atmo_levels
    
     !Variables related to inputting the 0-300 meter oceanic heat content
-    logical :: ohtc_input
     logical :: ohtc_prediction
 
     integer :: ohtc_res_size
@@ -487,6 +489,8 @@ module mod_utilities
     integer :: num_special_reservoirs
 
     logical :: slab_ocean_model_bool
+
+    logical :: ohtc_bool_input
  
     logical :: train_on_sst_anomalies
 
@@ -557,6 +561,9 @@ module mod_utilities
 
      !hourly Precip
      real(kind=dp), allocatable :: era_precip(:,:,:)
+
+     !Oceanic HeaT Content
+     real(kind=dp), allocatable :: era_ohtc(:,:,:)
   end type era_data_type
 
   type state_vector_type
@@ -1796,7 +1803,11 @@ module mod_utilities
             if(t-period < 1) then
               grid(i,t) = sum(copy(i,1:t))/t
             else
-              grid(i,t) = sum(copy(i,t-period:t))/period
+              if(abs(sum(copy(i,t-period:t))) > 0.0000001) then 
+                 grid(i,t) = sum(copy(i,t-period:t))/period
+              else
+                 grid(i,t) = grid(i,t)
+              endif 
             endif
          enddo
        enddo
