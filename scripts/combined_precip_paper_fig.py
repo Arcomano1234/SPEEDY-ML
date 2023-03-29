@@ -341,15 +341,17 @@ def total_precip_bias_plot():
     startdate_hybrid = datetime(2007,1,1,0)
     enddate_hybrid  = datetime(2047,12,31,0)
     #ds_hybrid = xr.open_dataset('/scratch/user/troyarcomano/Predictions/Hybrid/hybrid_prediction_era6000_20_20_20_sigma0.5_beta_res0.001_beta_model_1.0_prior_0.0_overlap1_vertlevel_1_precipclimo_2kbias_10_year_then_platue_speedy_bc_atmo_no_ice_2k_sst_mean_20std_increase_trial_12_29_2006_00.nc')
-    #ds_hybrid = xr.open_dataset('/scratch/user/troyarcomano/Predictions/Hybrid/hybrid_prediction_era6000_20_20_20_sigma0.5_beta_res0.001_beta_model_1.0_prior_0.0_overlap1_vertlevel_1_precip_epsilon0.001_multi_gaussian_noise_newest_version_32_processors_root_ssttrial_12_29_2006_00.nc') #hybrid_prediction_era6000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_1_vertlap_0_ocean_model_false_log_preciptrial_12_31_1999_00.nc')#
-    ds_hybrid = xr.open_dataset('/scratch/user/awikner/Predictions/Hybrid/hybrid_prediction_era6000_20_20_20_beta_res0.001_beta_model_1.0_prior_0.0_overlap1_vertlevel_1_precip_epsilon0.001_ocean_model7d_0.0001beta_sigma0.6_noise1_preciplognoise_dptrial_12_29_2006_00.nc')
+    ds_hybrid = xr.open_dataset('/scratch/user/troyarcomano/Predictions/Hybrid/hybrid_prediction_era6000_20_20_20_sigma0.5_beta_res0.001_beta_model_1.0_prior_0.0_overlap1_vertlevel_1_precip_epsilon0.001_multi_gaussian_noise_newest_version_32_processors_root_ssttrial_12_29_2006_00.nc') #hybrid_prediction_era6000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_1_vertlap_0_ocean_model_false_log_preciptrial_12_31_1999_00.nc')#
+    #ds_hybrid = xr.open_dataset('/scratch/user/awikner/Predictions/Hybrid/hybrid_prediction_era6000_20_20_20_beta_res0.001_beta_model_1.0_prior_0.0_overlap1_vertlevel_1_precip_epsilon0.001_ocean_model7d_0.0001beta_sigma0.6_noise1_preciplognoise_dptrial_12_29_2006_00.nc')
     timestep = 6
 
-    ds_speedy = xr.open_dataset('/scratch/user/troyarcomano/temp_storage/speedy_slab_ocean_original_sim.nc')
-    ds_speedy = speedy_total_precip(ds_speedy)
+    #ds_speedy = xr.open_dataset('/scratch/user/troyarcomano/temp_storage/speedy_slab_ocean_original_sim.nc')
+    ds_speedy = xr.open_dataset('/scratch/user/troyarcomano/QOCN_DATA/true0iteroutdaily.nc')
+    #ds_speedy = speedy_total_precip(ds_speedy)
 
     ds_speedy = ds_speedy.sel(time=slice(startdate_climo.strftime("%Y-%m-%d"),enddate_climo.strftime("%Y-%m-%d")))
-    ds_speedy_annual_climo = ds_speedy.groupby('time.year').mean('time')['tp']
+    #ds_speedy_annual_climo = ds_speedy.groupby('time.year').mean('time')['tp']
+    ds_speedy_annual_climo = ds_speedy.groupby('time.year').sum('time')['prec']
 
     ds_observed = get_era5_precip_timeseries(startdate_climo,enddate_climo,1)
     ds_observed_annual_climo = ds_observed.groupby('Timestep.year').sum('Timestep')['tp']
@@ -362,7 +364,7 @@ def total_precip_bias_plot():
     print(ds_hybrid_annual_climo)
 
     total_era5 = np.average(ds_observed_annual_climo.values, axis=0) * (1000.0 / 365.25) #Units meters per year to mm per day
-    total_speedy = np.average(ds_speedy_annual_climo.values, axis=0) #/ 12.0 #mm/day to  
+    total_speedy = np.average(ds_speedy_annual_climo.values, axis=0) / 365.25 #/ 12.0 #mm/day to  
     total_hybrid = np.average(ds_hybrid_annual_climo.values, axis=0) * (25.39998628 / 365.25) #Inches per year to mm/day
 
     speedy_bias = total_speedy - total_era5
@@ -391,12 +393,17 @@ def total_precip_bias_plot():
 
 
     ####Precip extreme
-    ds_era = ds_observed.resample(Timestep = "6H").sum()
+    #ds_era = ds_observed.resample(Timestep = "6H").sum()
+    ds_era = ds_observed.resample(Timestep = "1D").sum()
     ds_era = ds_era.where(ds_era['tp'] >= 0.0,drop=True)
-
+   
+    ds_hybrid = ds_hybrid.resample(Timestep = "1D").sum()
+ 
     era_uwind = ds_era['tp'].to_numpy().flatten() * 1000.0 #uv_to_windspeedy(ds_era) #abs(ds_era['U-wind'].to_numpy().flatten())
     hybrid_uwind = ds_hybrid['p6hr'].to_numpy().flatten() * 25.4#uv_to_windspeedy(ds_hybrid) #abs(ds_hybrid['U-wind'].to_numpy().flatten())
+    speedy_uwind = ds_speedy['prec'].to_numpy().flatten()
 
+    
     print(np.shape(era_uwind))
     print(np.shape(hybrid_uwind))
 
@@ -407,7 +414,9 @@ def total_precip_bias_plot():
     print('min hybrid',np.min(hybrid_uwind))
 
     era_uwind_extreme, percent_range = log_binning(era_uwind)
-    hybrid_uwind_extreme, percent_range = log_binning(hybrid_uwind)
+    hybrid_uwind_extreme, percent_range = log_binning(hybrid_uwind) 
+ 
+    speedy_uwind_extreme, percent_range = log_binning(speedy_uwind)
 
     percent_range = percent_range
     era_uwind_extreme = era_uwind_extreme
@@ -618,10 +627,11 @@ def total_precip_bias_plot():
 
     ax7.loglog(percent_range,era_uwind_extreme, linewidth=2,label='ERA5')
     ax7.loglog(percent_range,hybrid_uwind_extreme,linewidth=2,label='Hybrid')
+    ax7.loglog(percent_range,speedy_uwind_extreme,linewidth=2,label='SPEEDY')
 
     print(percent_range)
     ax7.set_xlim([10**-3,100])
-    ax7.set_ylim([10**-2,10**2])#np.max(era_uwind_extreme)])
+    ax7.set_ylim([10**-2,5*10**2])#np.max(era_uwind_extreme)])
     #ax1.set_xscale('log')
 
     x_labels_vals = [10**1,10**0,10**-1,10**-2,10**-3]
@@ -634,7 +644,8 @@ def total_precip_bias_plot():
 
     ax7.set_xlabel("Percentile",fontsize=12)
 
-    ax7.set_ylabel("Total Precipitation\n(mm/6 h)",fontsize=12)
+    #ax7.set_ylabel("Total Precipitation\n(mm/6 h)",fontsize=12)
+    ax7.set_ylabel("Total Precipitation\n(mm/d)",fontsize=12) 
    
     ax7.legend(fontsize=12)
 
