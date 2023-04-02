@@ -229,7 +229,7 @@ module mpires
         logical, intent(in) :: ocean_model 
 
         real(kind=dp), allocatable :: wholegrid4d(:,:,:,:), wholegrid2d(:,:)
-        real(kind=dp), allocatable :: wholegrid_sst(:,:), wholegrid_precip(:,:)
+        real(kind=dp), allocatable :: wholegrid_sst(:,:), wholegrid_precip(:,:), wholegrid_ohtc(:,:)
         
         real(kind=dp), allocatable :: forecast_4d(:,:,:,:), forecast_2d(:,:)
         real(kind=dp), allocatable :: sendreceivedata(:), temp4d(:,:,:,:), temp2d(:,:), temp3d(:,:,:), temp1d(:)
@@ -290,6 +290,11 @@ module mpires
              wholegrid_sst = res%model_parameters%base_sst_grid
              print *, 'allocated local_sst_flag'
              allocate(local_sst_flag(mpi_res%numprocs))
+ 
+             if(res%model_parameters%ohtc_bool_input) then
+               allocate(wholegrid_ohtc(xgrid,ygrid))
+               wholegrid_ohtc = 0.0_dp
+             endif
            endif
 
            if(res%model_parameters%precip_bool) then 
@@ -308,8 +313,12 @@ module mpires
 
               enddo 
               if(ocean_model) then
-                if(res%reservoir_special(i,1)%sst_bool_prediction) then
-                  call tile_full_2d_grid_with_local_res(res%model_parameters,res%model_parameters%region_indices(i),res%reservoir_special(i,1)%outvec,wholegrid_sst)
+                if(res%reservoir_special(i,1)%sst_bool_prediction) then 
+                  if(res%reservoir_special(i,1)%ohtc_prediction) then
+                     call tile_full_2d_grid_with_local_res(res%model_parameters,res%model_parameters%region_indices(i),res%reservoir_special(i,1)%outvec,wholegrid_sst)
+                  else 
+                     call tile_full_2d_grid_with_local_res(res%model_parameters,res%model_parameters%region_indices(i),res%reservoir_special(i,1)%outvec,wholegrid_sst) 
+                  endif  
                 else
                   allocate(temp1d( res%grid_special(i,1)%resxchunk * res%grid_special(i,1)%resychunk))
                   temp1d = 272.0_dp
@@ -364,7 +373,10 @@ module mpires
 
                     sendreceivedata = res%reservoir_special(i,1)%outvec
                  else 
-                    local_domain_size = res%grid_special(i,1)%resxchunk * res%grid_special(i,1)%resychunk 
+                    local_domain_size = res%grid_special(i,1)%resxchunk * res%grid_special(i,1)%resychunk
+                    if(res%model_parameters%ohtc_bool_input) then  
+                       local_domain_size = res%grid_special(i,1)%resxchunk * res%grid_special(i,1)%resychunk * 2
+                    endif 
 
                     allocate(sendreceivedata(local_domain_size))
 
@@ -514,8 +526,11 @@ module mpires
            if(res%model_parameters%precip_bool) then
              full_grid_num_2ds = full_grid_num_2ds + 1 
            endif 
+   
+           if(res%model_parameters%ohtc_bool_input) then
+             full_grid_num_2ds = full_grid_num_2ds + 1
+           endif
 
-           full_grid_num_2ds = 3 
 
            allocate(temp3d(full_grid_num_2ds,xgrid,ygrid))
          
@@ -530,6 +545,10 @@ module mpires
            if(res%model_parameters%precip_bool) then 
              temp3d(3,:,:) = wholegrid_precip
            endif 
+
+           if(res%model_parameters%ohtc_bool_input) then
+             temp3d(4,:,:) = wholegrid_ohtc
+           endif
 
            !print *, 'wholegrid_sst',wholegrid_sst
            if(ocean_model .or. res%model_parameters%precip_bool) then
@@ -703,8 +722,12 @@ module mpires
                 call MPI_RECV(sendreceivedata,receive_size,MPI_DOUBLE_PRECISION,from,tag,mpi_res%mpi_world,MPI_STATUS_IGNORE,mpi_res%ierr)
 
                 if(res%reservoir_special(i,1)%sst_bool_prediction) then
-                   call standardize_data_given_pars1d(sendreceivedata,res%grid_special(i,1)%mean(res%grid_special(i,1)%sst_mean_std_idx),res%grid_special(i,1)%std(res%grid_special(i,1)%sst_mean_std_idx))
-                   res%reservoir_special(i,1)%feedback(res%grid_special(i,1)%sst_start:res%grid_special(i,1)%sst_end) = sendreceivedata
+                   call standardize_data_given_pars1d(sendreceivedata(1:res%reservoir(i,1)%sst_size_input),res%grid_special(i,1)%mean(res%grid_special(i,1)%sst_mean_std_idx),res%grid_special(i,1)%std(res%grid_special(i,1)%sst_mean_std_idx))
+                   res%reservoir_special(i,1)%feedback(res%grid_special(i,1)%sst_start:res%grid_special(i,1)%sst_end) = sendreceivedata(1:res%reservoir(i,1)%sst_size_input)
+                   if(res%model_parameters%ohtc_bool_input) then
+                      call standardize_data_given_pars1d(sendreceivedata(res%reservoir(i,1)%sst_size_input+1:res%reservoir(i,1)%sst_size_input+res%reservoir_special(i,1)%ohtc_input_size),res%grid_special(i,1)%mean(res%grid_special(i,1)%ohtc_mean_std_idx),res%grid_special(i,1)%std(res%grid_special(i,1)%ohtc_mean_std_idx)) 
+                      res%reservoir_special(i,1)%feedback(res%grid_special(i,1)%ohtc_start:res%grid_special(i,1)%ohtc_end) = sendreceivedata(res%reservoir(i,1)%sst_size_input+1:res%reservoir(i,1)%sst_size_input+res%reservoir_special(i,1)%ohtc_input_size)
+                   endif 
                 endif 
 
                 deallocate(sendreceivedata)
@@ -753,6 +776,7 @@ module mpires
            if(ocean_model) then
               if(res%reservoir_special(i,1)%sst_bool_prediction) then
                  res%reservoir_special(i,1)%averaged_atmo_input_vec(:,mod(timestep-1,res%model_parameters%timestep_slab/res%model_parameters%timestep-1)+1) = res%reservoir(i,j-1)%feedback(res%reservoir_special(i,1)%atmo_training_data_idx)
+                 !NOTE averaging is done for everything needs to change
                  if(res%reservoir_special(i,1)%assigned_region == 10) print *,'averaged_atmo_input_vec(1,:)',res%reservoir_special(i,1)%averaged_atmo_input_vec(1,:)
                  res%reservoir_special(i,1)%feedback = sum(res%reservoir_special(i,1)%averaged_atmo_input_vec,dim=2)/(res%model_parameters%timestep_slab/res%model_parameters%timestep-1) !res%reservoir(i,j-1)%feedback(res%reservoir_special(i,1)%atmo_training_data_idx)
                  if(res%reservoir_special(i,1)%assigned_region == 10) print *,'res%reservoir_special(i,1)%feedback(1)',res%reservoir_special(i,1)%feedback(1)
@@ -835,7 +859,7 @@ module mpires
 
        integer, intent(in)  :: region, vert_level
        integer, intent(out) :: arraysize
-
+     
        !local stuff
        integer :: localres_xstart,localres_xend,localres_ystart,localres_yend,localresxchunk,localresychunk
        integer :: localres_zstart,localres_zend,localreszchunk
@@ -843,6 +867,10 @@ module mpires
        call getxyresextent(model_parameters%number_of_regions,region,localres_xstart,localres_xend,localres_ystart,localres_yend,localresxchunk,localresychunk)
 
        arraysize = localresxchunk*localresychunk
+
+       if(model_parameters%ohtc_bool_input) then 
+          arraysize = arraysize + localresxchunk*localresychunk 
+        endif 
 
      end subroutine 
 
@@ -889,6 +917,10 @@ module mpires
 
 
        arraysize = localinputxchunk*localinputychunk
+
+       if(model_parameters%ohtc_bool_input) then
+         arraysize = arraysize + localinputxchunk*localinputychunk
+       endif
 
      end subroutine
 
@@ -1579,7 +1611,7 @@ module mpires
           if(.not. allocated(internal_state_vector%sst_hybrid)) then 
             allocate(internal_state_vector%sst_hybrid(size_x,size_y))
           endif 
-          internal_state_vector%sst_hybrid = sst_grid
+          internal_state_vector%sst_hybrid = sst_grid !call lin_interp(old_sst_state, sst_grid,interped_state) next line internal_state_vector%sst_hybrid = interped_state
           print *, 'mean hybrid sst',sum(sst_grid)/size(sst_grid)
         endif 
 

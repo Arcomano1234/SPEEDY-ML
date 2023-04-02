@@ -707,9 +707,21 @@ module resdomain
          allocate(temp3d(grid%inputxchunk,grid%inputychunk,j))
          allocate(tiledstatevec(reservoir%chunk_size_prediction,j))
 
-         temp3d = reshape(statevec(grid%sst_start:grid%sst_end,:),(/grid%inputxchunk,grid%inputychunk,j/))
+         if(reservoir%ohtc_prediction) then
+           print *, 'target data sees reservoir%ohtc_prediction'
+           temp3d = reshape(statevec(grid%sst_start:grid%sst_end,:),(/grid%inputxchunk,grid%inputychunk,j/))
 
-         tiledstatevec = reshape(temp3d(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,:),(/grid%resxchunk*grid%resychunk,j/))
+           tiledstatevec(1:grid%resxchunk*grid%resychunk,:) = reshape(temp3d(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,:),(/grid%resxchunk*grid%resychunk,j/))
+
+           temp3d = reshape(statevec(grid%ohtc_start:grid%ohtc_end,:),(/grid%inputxchunk,grid%inputychunk,j/))
+  
+           tiledstatevec(grid%resxchunk*grid%resychunk+1:reservoir%chunk_size_prediction,:) = reshape(temp3d(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,:),(/grid%resxchunk*grid%resychunk,j/))
+         else
+           print *, 'target reservoir%ohtc_prediction False'
+           temp3d = reshape(statevec(grid%sst_start:grid%sst_end,:),(/grid%inputxchunk,grid%inputychunk,j/))
+
+           tiledstatevec = reshape(temp3d(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend,:),(/grid%resxchunk*grid%resychunk,j/))
+         endif 
 
          return
 
@@ -732,10 +744,20 @@ module resdomain
          allocate(temp2d(grid%inputxchunk,grid%inputychunk))
          allocate(tiledstatevec(reservoir%chunk_size_prediction))
 
-         temp2d = reshape(statevec(grid%sst_start:grid%sst_end),(/grid%inputxchunk,grid%inputychunk/))
+         if(reservoir%ohtc_prediction) then
 
-         tiledstatevec = reshape(temp2d(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend),(/grid%resxchunk*grid%resychunk/))
+           temp2d =  reshape(statevec(grid%sst_start:grid%sst_end),(/grid%inputxchunk,grid%inputychunk/))
 
+           tiledstatevec(1:grid%resxchunk*grid%resychunk) = reshape(temp2d(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend),(/grid%resxchunk*grid%resychunk/))
+
+           temp2d = reshape(statevec(grid%ohtc_start:grid%ohtc_end),(/grid%inputxchunk,grid%inputychunk/))
+
+           tiledstatevec(grid%resxchunk*grid%resychunk+1:reservoir%chunk_size_prediction) = reshape(temp2d(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend),(/grid%resxchunk*grid%resychunk/))
+         else
+           temp2d = reshape(statevec(grid%sst_start:grid%sst_end),(/grid%inputxchunk,grid%inputychunk/))
+
+           tiledstatevec = reshape(temp2d(grid%tdata_xstart:grid%tdata_xend,grid%tdata_ystart:grid%tdata_yend),(/grid%resxchunk*grid%resychunk/))
+         endif
          return
       end subroutine 
  

@@ -514,6 +514,9 @@ module speedy_res_interface
        allocate(era_data%era_precip(grid%inputxchunk,grid%inputychunk,numofhours))
      endif
 
+     !if(reservoir%ohtc_input) then
+     !  allocate(era_data%era_ohtc(grid%inputxchunk,grid%inputychunk,numofhours))
+     !endif
 
      !print *, numofhours
      hour_counter = 1 

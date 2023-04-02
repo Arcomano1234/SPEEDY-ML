@@ -23,14 +23,14 @@ subroutine initialize_model_parameters(model_parameters,processor,num_of_procs)
    write_training_weights = .True.
 
    model_parameters%num_predictions = 1
-   model_parameters%trial_name = '6000_20_20_20_sigma0.5_beta_res0.001_beta_model_1.0_prior_0.0_overlap1_vertlevel_1_precip_epsilon0.001_multi_gaussian_noise'!2kbias_10_year_then_platue_speedy_atmo_only' !14d_0.9rho_10noise_beta0.001_20years'  
+   model_parameters%trial_name = '6000_20_20_20_sigma0.5_beta_res0.001_beta_model_1.0_prior_0.0_overlap1_vertlevel_1_precip_epsilon0.001_ohtc_test'!2kbias_10_year_then_platue_speedy_atmo_only' !14d_0.9rho_10noise_beta0.001_20years'  
    !model_parameters%trial_name = '6000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_4_vertlap_6_slab_ocean_model_true_precip_true'
    !'4000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_4_vertlap_2_full_timestep_1'
    !model_parameters%trial_name = '4000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_4_vertlap_2_full_test_climate_all_tisr_longer'
-   model_parameters%trial_name_extra_end = 'no_climo_sst'!'climo_2kbias_10_year_then_platue_speedy_bc_atmo_no_ice_2k_sst_mean_20std_increase_'
+   model_parameters%trial_name_extra_end = ''!'climo_2kbias_10_year_then_platue_speedy_bc_atmo_no_ice_2k_sst_mean_20std_increase_'
 
    model_parameters%discardlength = 24*10!7
-   model_parameters%traininglength =  227760 - 24*10 !- 40*24!166440 - 24*10  !87600*2+24*10!3+24*10!188280 !254040 !81600!188280!0!0!0!166600!81600 !00!58000!67000!77000
+   model_parameters%traininglength =  12000!227760 - 24*10 !- 40*24!166440 - 24*10  !87600*2+24*10!3+24*10!188280 !254040 !81600!188280!0!0!0!166600!81600 !00!58000!67000!77000
    model_parameters%predictionlength = 8760*20!*70!8760*70!8760*3!1 + 24*5!8760*30 + 24*5!504!8760*11 + 24*5 !504!0
    model_parameters%synclength = 24*14!*4 + 3*24!24*14*2 !+ 180*24
    model_parameters%timestep = 6!1 !6
@@ -40,6 +40,8 @@ subroutine initialize_model_parameters(model_parameters,processor,num_of_procs)
 
    model_parameters%slab_ocean_model_bool = .True.
    model_parameters%train_on_sst_anomalies = .False.
+
+   model_parameters%ohtc_bool_input = .True.
 
    model_parameters%non_stationary_ocn_climo = .False.
    model_parameters%final_sst_bias = 2.0
@@ -637,7 +639,7 @@ subroutine get_prediction_data(reservoir,model_parameters,grid,start_index,lengt
 
    call get_current_time_delta_hour(calendar,start_index+length) 
 
-   if(model_parameters%num_of_regions_on_proc > 1000) then
+   if(model_parameters%num_of_regions_on_proc > 1153) then
      if(.not. allocated(model_parameters%opened_netcdf_files)) then
         max_netcdf_files = (calendar%currentyear - start_year + 1) * 6 
         allocate(model_parameters%opened_netcdf_files(max_netcdf_files))
@@ -864,7 +866,7 @@ subroutine initialize_prediction(reservoir,model_parameters,grid)
      end where
      endif 
 
-     model_parameters%base_sst_grid = temp3d(:,:,1)
+     model_parameters%base_sst_grid = temp3d(:,:,1) !this is a major bug should be the current forecast start time 
 
      if(model_parameters%train_on_sst_anomalies) then
         model_parameters%base_sst_grid =  model_parameters%base_sst_grid - temp3d_2(:,:,1)

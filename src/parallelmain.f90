@@ -190,11 +190,11 @@ program main
      enddo 
 
      if(res%model_parameters%slab_ocean_model_bool) then
-        if(res%reservoir_special(i,1)%sst_bool_prediction) then
+        !if(res%reservoir_special(i,1)%sst_bool_prediction) then
           print *,'ocean model initialize prediction region,i',res%reservoir_special(i,1)%assigned_region,i
           print *, 'shape(res%reservoir_special)',shape(res%reservoir_special)
           call initialize_prediction_slab(res%reservoir_special(i,1),res%model_parameters,res%grid_special(i,1),res%reservoir(i,j-1),res%grid(i,j-1))
-        endif
+        !endif
      endif 
   enddo 
 
@@ -214,11 +214,12 @@ program main
                 res%reservoir(i,j)%current_state = res%reservoir(i,j)%saved_state 
              enddo
              if(res%model_parameters%slab_ocean_model_bool) then
-               if(res%reservoir_special(i,1)%sst_bool_prediction) then 
+               !if(res%reservoir_special(i,1)%sst_bool_prediction) then 
                  call start_prediction_slab(res%reservoir_special(i,1),res%model_parameters,res%grid_special(i,1),res%reservoir(i,j-1),res%grid(i,j-1),prediction_num) 
 
-                 res%reservoir_special(i,1)%current_state = res%reservoir_special(i,1)%saved_state
-               endif 
+                 if(res%reservoir_special(i,1)%sst_bool_prediction) then
+                   res%reservoir_special(i,1)%current_state = res%reservoir_special(i,1)%saved_state
+                 endif 
              endif 
           enddo 
         endif
@@ -233,7 +234,7 @@ program main
               endif 
            enddo
            !print *, 'mod((t-1)*res%model_parameters%timestep,res%model_parameters%timestep_slab)',mod((t-1)*res%model_parameters%timestep,res%model_parameters%timestep_slab)
-           if(res%model_parameters%slab_ocean_model_bool) then
+           if(res%model_parameters%slab_ocean_model_bool) then !NOTE TODO ML ocean doesnt get called until t = mod(res%model_parameters%timestep,res%model_parameters%timestep_slab) == 0
              if(mod((t)*res%model_parameters%timestep,res%model_parameters%timestep_slab) == 0 .and. res%reservoir_special(i,1)%sst_bool_prediction .and. .not. res%model_parameters%non_stationary_ocn_climo ) then
                 if(res%reservoir_special(i,1)%assigned_region == 954) print *, 'calling predict slab'
                 !TODO rolling_average_over_a_period(grid,period)

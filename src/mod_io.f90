@@ -307,8 +307,8 @@ module mod_io
 
        real(kind=dp), allocatable :: copy(:,:,:,:), copy3d(:,:,:)
 
-       type(string) :: units(7)
-       type(string) :: varname(7)
+       type(string) :: units(8)
+       type(string) :: varname(8)
 
        units(1)%str = 'Kelvin'
        varname(1)%str = 'Temperature'
@@ -330,6 +330,9 @@ module mod_io
  
        units(7)%str = 'in/6hr'
        varname(7)%str = 'p6hr'
+       
+       units(8)%str = 'J/m2'
+       varname(8)%str = 'sohtc300'
 
        !copy data
        allocate(copy,source=grid4d)
@@ -448,6 +451,25 @@ module mod_io
              call nc_check(nf90_put_var(file_id, yvar_id, lat))
            endif
 
+           if(model_parameters%ohtc_bool_input) then
+             call nc_check(nf90_redef(file_id))
+
+             !Lets do ohtc
+             call nc_check(nf90_def_var(file_id,varname(8)%str,NF90_REAL,arrdims3d,array_id))
+
+             call nc_check(nf90_put_att(file_id, array_id, "units", units(8)%str))
+
+             call nc_check(nf90_enddef(file_id))
+
+             !Write out the values
+
+             call nc_check(nf90_put_var(file_id, array_id, copy3d(4,:,:),start=start3d, count=varcount3d))
+
+             call nc_check(nf90_put_var(file_id, xvar_id, lon))
+
+             call nc_check(nf90_put_var(file_id, yvar_id, lat))
+           endif
+
            ! close; done
            call nc_check(nf90_close(file_id))
         else
@@ -471,6 +493,11 @@ module mod_io
 
              call nc_check(nf90_inq_varid(file_id,varname(7)%str,array_id))
              call nc_check(nf90_put_var(file_id, array_id, copy3d(3,:,:), start=start3d, count=varcount3d))
+           endif
+
+           if(model_parameters%ohtc_bool_input) then
+             call nc_check(nf90_inq_varid(file_id,varname(6)%str,array_id))
+             call nc_check(nf90_put_var(file_id, array_id, grid3d(4,:,:),start=start3d, count=varcount3d))
            endif
 
            call nc_check(nf90_close(file_id))
