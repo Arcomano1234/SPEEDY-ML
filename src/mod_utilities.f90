@@ -198,8 +198,11 @@ module mod_utilities
     !Sigma for input into reservoir
     real(kind=dp)              :: sigma
 
-    !Leakage 
-    real(kind=dp)              :: leakage
+    !Leakage
+    real(kind=dp)              :: leakage 
+    real(kind=dp), allocatable :: leakage_slab(:)
+    real(kind=dp)              :: leakage_slab_upper
+    real(kind=dp)              :: leakage_slab_lower
 
     !COO sparse matrix holds row and col indexs
     integer, allocatable       :: rows(:)

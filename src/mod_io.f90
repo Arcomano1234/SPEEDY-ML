@@ -496,7 +496,7 @@ module mod_io
            endif
 
            if(model_parameters%ohtc_bool_input) then
-             call nc_check(nf90_inq_varid(file_id,varname(6)%str,array_id))
+             call nc_check(nf90_inq_varid(file_id,varname(8)%str,array_id))
              call nc_check(nf90_put_var(file_id, array_id, grid3d(4,:,:),start=start3d, count=varcount3d))
            endif
 
@@ -1135,7 +1135,294 @@ module mod_io
         
         deallocate(copy)
         return
-     end subroutine 
+     end subroutine
+
+     subroutine write_netcdf_parallel_mpi(res_xstart,res_ystart,grid5d,grid3d,timestep,filename,mpi_res,create_file)
+        use mpi
+
+        use mod_utilities, only : mpi_type
+        use stringtype, only : string
+        use mod_utilities, only : xgrid, ygrid, zgrid
+
+        integer, intent(in)          :: res_xstart
+        integer, intent(in)          :: res_ystart
+        real(kind=dp), intent(in)    :: grid5d(:,:,:,:,:)
+        real(kind=dp), intent(in)    :: grid3d(:,:,:) !Yes I know bad name sorry
+        integer, intent(in)          :: timestep
+        character(len=*), intent(in) :: filename
+        type(mpi_type), intent(in)   :: mpi_res
+        logical, intent(in)          :: create_file
+
+        !local netcdf stuff
+        integer, parameter :: numdims4d=4, numdims3d=3, numspeedyvars=5
+        integer :: dimsx,dimsy,dimsz,dimst
+
+        integer :: file_id, xdim_id, ydim_id, zdim_id, timedim_id
+        integer :: array_id, xvar_id, yvar_id
+        integer :: start4d(numdims4d),varcount4d(numdims4d),start3d(numdims3d),varcount3d(numdims3d)
+        integer :: arrdims4d(numdims4d),arrdims3d(numdims3d)
+
+        integer :: i, counter
+
+        real(kind=dp) :: lon(xgrid), lat(ygrid)
+
+        real(kind=dp), allocatable :: copy(:,:,:,:,:)
+
+        type(string) :: units(numspeedyvars)
+        type(string) :: varname(numspeedyvars)
+
+        units(1)%str = 'Kelvin'
+        varname(1)%str = 'Temperature'
+
+        units(2)%str = 'm/s'
+        varname(2)%str = 'U-wind'
+
+        units(3)%str = 'm/s'
+        varname(3)%str = 'V-wind'
+
+        units(4)%str = 'g/kg'
+        varname(4)%str = 'Specific_Humidity'
+
+        units(5)%str = 'log(surfacepressure)'
+        varname(5)%str = 'logp'
+
+        !copy data
+        allocate(copy,source=grid5d)
+
+        dimsx = size(grid5d,2)
+        dimsy = size(grid5d,3)
+        dimsz = size(grid5d,4)
+        dimst = size(grid5d,5)
+
+        varcount4d = (/ dimsx, dimsy, dimsz, dimst/)
+        start4d = (/res_xstart, res_ystart,1, timestep /)
+
+        varcount3d = (/ dimsx, dimsy, dimst /)
+        start3d = (/res_xstart, res_ystart, timestep /)
+
+        lon = (/(real(counter)*3.75,counter=0,95)/)
+        lat = (/-87.159, -83.479, -79.777,  -76.070, -72.362, -68.652, &
+                -64.942, -61.232, -57.521, -53.810, -50.099, -46.389, -42.678,-38.967, &
+                -35.256, -31.545 , -27.833, -24.122, -20.411, -16.700, -12.989, -9.278, &
+                -5.567, -1.856, 1.856, 5.567, 9.278, 12.989, 16.700, 20.411, &
+                24.122, 27.833, 31.545, 35.256, 38.967, 42.678, 46.389, 50.099, &
+                53.810, 57.521, 61.232, 64.942, 68.652, 72.362, 76.070, 79.777, &
+                83.479, 87.159/)
+
+        if(create_file) then
+           call nc_check(nf90_create(filename,IOR(NF90_NETCDF4,NF90_MPIIO),file_id,comm=mpi_res%mpi_world,info=MPI_INFO_NULL))
+
+           ! define the dimensions
+           call nc_check(nf90_def_dim(file_id, 'Lon', xgrid, xdim_id))
+           call nc_check(nf90_def_dim(file_id, 'Lat', ygrid, ydim_id))
+           call nc_check(nf90_def_dim(file_id, 'Sigma_Level', zgrid, zdim_id))
+           call nc_check(nf90_def_dim(file_id, 'Timestep', NF90_UNLIMITED, timedim_id))
+
+           !Assign lat and lon ids and units
+           call nc_check(nf90_def_var(file_id,'Lon',NF90_REAL,xdim_id,xvar_id))
+           call nc_check(nf90_def_var(file_id,'Lat',NF90_REAL,ydim_id,yvar_id))
+
+           call nc_check(nf90_put_att(file_id,xvar_id,"units",'degrees_north'))
+           call nc_check(nf90_put_att(file_id,yvar_id,"units",'degrees_east'))
+           ! now that the dimensions are defined, we can define variables on
+           ! them,...
+           arrdims4d = (/ xdim_id, ydim_id, zdim_id, timedim_id /)
+           arrdims3d = (/ xdim_id, ydim_id, timedim_id /)
+
+           do i=1, numspeedyvars-1
+              call nc_check(nf90_def_var(file_id,varname(i)%str,NF90_REAL,arrdims4d,array_id))
+              ! ...and assign units to them as an attribute
+
+              call nc_check(nf90_put_att(file_id, array_id, "units", units(i)%str))
+
+              call nc_check(nf90_enddef(file_id))
+
+              !parallel io is more complicated
+              ! Unlimited dimensions require collective writes
+              call nc_check(nf90_var_par_access(file_id, array_id, nf90_collective))
+
+              !Write out the values
+              call nc_check(nf90_put_var(file_id, array_id, copy(i,:,:,:,:),start=start4d, count=varcount4d))
+
+              call nc_check(nf90_put_var(file_id, xvar_id, lon))
+
+              call nc_check(nf90_put_var(file_id, yvar_id, lat))
+
+              call nc_check(nf90_redef(file_id))
+           enddo
+           !Lets do logp
+           call nc_check(nf90_def_var(file_id,varname(5)%str,NF90_REAL,arrdims3d,array_id))
+
+           call nc_check(nf90_put_att(file_id, array_id, "units", units(5)%str))
+
+           call nc_check(nf90_enddef(file_id))
+
+           call nc_check(nf90_var_par_access(file_id,array_id,nf90_collective))
+           !Write out the values
+           call nc_check(nf90_put_var(file_id, array_id, grid3d,start=start3d, count=varcount3d))
+
+           call nc_check(nf90_put_var(file_id, xvar_id, lon))
+
+           call nc_check(nf90_put_var(file_id, yvar_id, lat))
+           ! close; done
+           call nc_check(nf90_close(file_id))
+        else
+           call nc_check(nf90_open(filename,IOR(NF90_WRITE,NF90_MPIIO),file_id,comm=mpi_res%mpi_world,info=MPI_INFO_NULL))
+
+           do i=1, numspeedyvars-1
+              call nc_check(nf90_inq_varid(file_id,varname(i)%str,array_id))
+              call nc_check(nf90_var_par_access(file_id,array_id,nf90_collective))
+              call nc_check(nf90_put_var(file_id, array_id, copy(i,:,:,:,:),start=start4d,count=varcount4d))
+           enddo
+
+           call nc_check(nf90_inq_varid(file_id,varname(5)%str,array_id))
+
+           call nc_check(nf90_var_par_access(file_id,array_id,nf90_collective))
+
+           call nc_check(nf90_put_var(file_id, array_id, grid3d,start=start3d,count=varcount3d))
+
+           call nc_check(nf90_close(file_id))
+        endif
+
+        deallocate(copy)
+        return
+     end subroutine
+
+     subroutine write_netcdf_parallel_mpi_ocean(model_parameters,res_xstart,res_ystart,timestep,filename,mpi_res,create_file,grid4d,batch_size)
+        use mpi
+
+        use mod_utilities, only : mpi_type
+        use stringtype, only : string
+        use mod_utilities, only : xgrid, ygrid
+
+        type(model_parameters_type), intent(in) :: model_parameters
+        integer, intent(in)                  :: res_xstart
+        integer, intent(in)                  :: res_ystart
+        real(kind=dp), intent(in), optional  :: grid4d(:,:,:,:)     !Yes I know bad name sorry
+        integer, intent(in)                  :: timestep
+        character(len=*), intent(in)         :: filename
+        type(mpi_type), intent(inout)        :: mpi_res
+        logical, intent(in)                  :: create_file
+        integer, intent(in), optional        :: batch_size         !Necessary input if grid4d is not provided
+
+        !local netcdf stuff
+        integer, parameter :: numdims3d=3
+        integer :: dimsx,dimsy,dimst
+
+        integer :: file_id, xdim_id, ydim_id, timedim_id
+        integer :: array_id, xvar_id, yvar_id
+        integer :: start3d(numdims3d),varcount3d(numdims3d)
+        integer :: arrdims3d(numdims3d)
+
+        integer :: i, counter
+
+        real(kind=dp) :: lon(xgrid), lat(ygrid)
+
+        real(kind=dp), allocatable :: copy(:,:,:,:)
+
+        type(string), allocatable :: units(:)
+        type(string), allocatable :: varname(:)
+
+        call MPI_Barrier(mpi_res%mpi_world, mpi_res%ierr)
+
+        if (present(grid4d)) then
+        !copy data
+        allocate(copy,source=grid4d)
+
+        dimsx = size(grid4d,2)
+        dimsy = size(grid4d,3)
+        dimst = size(grid4d,4)
+
+        varcount3d = (/ dimsx, dimsy, dimst /)
+        start3d = (/res_xstart, res_ystart, timestep /)
+        print *, 'dimst = size(grid4d,4) =: ', dimst
+        else
+        dimst = batch_size
+        print *,'dimst = batch_size =: ', dimst
+        endif
+
+        if(.not. model_parameters%ohtc_bool_input) then
+          allocate(units(1))
+          allocate(varname(1))
+          units(1)%str = 'Kelvin'
+          varname(1)%str = 'SST'
+        else
+          allocate(units(2))
+          allocate(varname(2))
+          units(1)%str = 'Kelvin'
+          varname(1)%str = 'SST'
+          units(2)%str = 'J/m^2'
+          varname(2)%str = 'sohtc300'
+        endif 
+
+        lon = (/(real(counter)*3.75,counter=0,95)/)
+        lat = (/-87.159, -83.479, -79.777,  -76.070, -72.362, -68.652, &
+                -64.942, -61.232, -57.521, -53.810, -50.099, -46.389, -42.678,-38.967, &
+                -35.256, -31.545 , -27.833, -24.122, -20.411, -16.700, -12.989, -9.278, &
+                -5.567, -1.856, 1.856, 5.567, 9.278, 12.989, 16.700, 20.411, &
+                24.122, 27.833, 31.545, 35.256, 38.967, 42.678, 46.389, 50.099, &
+                53.810, 57.521, 61.232, 64.942, 68.652, 72.362, 76.070, 79.777, &
+                83.479, 87.159/)
+
+        if(create_file) then
+           call nc_check(nf90_create(filename,IOR(NF90_NETCDF4,NF90_MPIIO),file_id,comm=mpi_res%mpi_world,info=MPI_INFO_NULL))
+
+           ! define the dimensions
+           call nc_check(nf90_def_dim(file_id, 'Lon', xgrid, xdim_id))
+           call nc_check(nf90_def_dim(file_id, 'Lat', ygrid, ydim_id))
+           call nc_check(nf90_def_dim(file_id, 'Timestep', dimst, timedim_id)) !dimst
+
+           !Assign lat and lon ids and units
+           call nc_check(nf90_def_var(file_id,'Lon',NF90_REAL,xdim_id,xvar_id))
+           call nc_check(nf90_def_var(file_id,'Lat',NF90_REAL,ydim_id,yvar_id))
+
+           call nc_check(nf90_put_att(file_id,xvar_id,"units",'degrees_north'))
+           call nc_check(nf90_put_att(file_id,yvar_id,"units",'degrees_east'))
+           ! now that the dimensions are defined, we can define variables on
+           ! them,...
+
+           arrdims3d = (/ xdim_id, ydim_id, timedim_id /)
+
+           do i=1,size(units,1)
+              call nc_check(nf90_def_var(file_id,varname(i)%str,NF90_REAL,arrdims3d,array_id))
+
+              call nc_check(nf90_put_att(file_id, array_id, "units", units(i)%str))
+
+              call nc_check(nf90_enddef(file_id))
+
+              call nc_check(nf90_var_par_access(file_id,array_id,nf90_independent)) !nf90_collective))
+              !Write out the values
+              if (present(grid4d)) then
+                 call nc_check(nf90_put_var(file_id, array_id, grid4d(i,:,:,:), start=start3d, count=varcount3d))
+              endif
+
+              call nc_check(nf90_put_var(file_id, xvar_id, lon))
+
+              call nc_check(nf90_put_var(file_id, yvar_id, lat))
+
+              call nc_check(nf90_redef(file_id))
+           enddo
+           ! close; done
+           call nc_check(nf90_close(file_id))
+        else
+           call nc_check(nf90_open(filename,IOR(NF90_WRITE,NF90_MPIIO),file_id,comm=mpi_res%mpi_world,info=MPI_INFO_NULL))
+
+           do i=1,size(units,1)
+              call nc_check(nf90_inq_varid(file_id,varname(i)%str,array_id))
+              call nc_check(nf90_var_par_access(file_id,array_id,nf90_independent)) !nf90_collective))
+              if (present(grid4d)) then
+                 call nc_check(nf90_put_var(file_id, array_id, grid4d(i,:,:,:), start=start3d, count=varcount3d))
+              endif
+           enddo
+
+           call nc_check(nf90_close(file_id))
+        endif
+
+        if (allocated(copy)) deallocate(copy)
+        if (allocated(units)) deallocate(units)
+        if (allocated(varname)) deallocate(varname)
+        return
+     end subroutine  
 
      subroutine read_netcdf_4d(varname,filename,var)
         character(len=*), intent(in) :: varname
@@ -1943,7 +2230,7 @@ module mod_io
       else
         stride = 1
       endif
-
+      
       era_var_names(1)%str = 'Temperature'
       era_var_names(2)%str = 'U-wind'
       era_var_names(3)%str = 'V-wind'
@@ -1969,7 +2256,7 @@ module mod_io
            !allocate(era_data%eravariables(num_of_era_vars-1,grid%inputxchunk,grid%inputychunk,grid%inputzchunk,dim_length(4)/stride))
            allocate(era_data%eravariables(num_of_era_vars-1,grid%inputxchunk,grid%inputychunk,zgrid,dim_length(4)/stride))
          endif 
-
+         
          !check if its a periodicboundary or not 
          if(grid%periodicboundary) then 
            !Do stuff
@@ -1998,7 +2285,7 @@ module mod_io
            start4d = [integer:: grid%input_xstart,grid%input_ystart,1,start_time]
            count4d = [integer:: grid%inputxchunk,grid%inputychunk,zgrid,dim_length(4)/stride]
            stride4d = [integer:: 1,1,1,stride]
- 
+           print *, 'mod_io. read_era_data_parallel. start4d, count4d ,', start4d, count4d
            call nc_check(nf90_get_var(ncid,varid,era_data%eravariables(i,:,:,:,:),start=start4d,count=count4d))!,stride=stride4d))      
         endif 
       enddo 
@@ -2778,7 +3065,7 @@ module mod_io
          call nc_check(nf90_inquire_dimension(ncid,dimids(j),len=dim_length(j)),message='nf90_inquire_dimension')
       enddo
 
-
+      !print *, 'mod_io/read_3d_file_parallel. dim_length(1), dim_length(2), dim_length(3)', dim_length(1), dim_length(2), dim_length(3)
       if(present(time_length)) then
         dim_length(3) = time_length
       endif
@@ -2806,7 +3093,9 @@ module mod_io
         count3d = [integer:: grid%inputxchunk,grid%inputychunk,dim_length(3)/stride]
         stride3d = [integer:: 1,1,stride]
 
+        !print *, 'mod_io/read_3d_file_parallel. start3d(3), count3d(3), size(var3d,3) ', start3d(3), count3d(3), size(var3d,3)
         call nc_check(nf90_get_var(ncid,varid,var3d,start=start3d,count=count3d))
+
       endif
       call nc_check(nf90_close(ncid))
     end subroutine read_3d_file_parallel
@@ -2949,7 +3238,7 @@ module mod_io
 
       integer :: ncid
 
-      file_path = '/scratch/user/troyarcomano/ML_SPEEDY_WEIGHTS/'
+      file_path = '/scratch/user/dpp94/ML_SPEEDY_WEIGHTS/'
 
       write(worker_char,'(i0.4)') reservoir%assigned_region
       print *, 'reservoir%assigned_region',reservoir%assigned_region
@@ -2996,7 +3285,7 @@ module mod_io
 
       integer :: ncid
 
-      file_path = '/scratch/user/troyarcomano/ML_SPEEDY_WEIGHTS/'
+      file_path = '/scratch/user/dpp94/ML_SPEEDY_WEIGHTS/'
 
       write(worker_char,'(i0.4)') reservoir%assigned_region
       print *, 'reservoir%assigned_region',reservoir%assigned_region
@@ -3024,6 +3313,10 @@ module mod_io
         call read_netcdf_1d_dp_opened('mean',ncid,grid%mean)
 
         call read_netcdf_1d_dp_opened('std',ncid,grid%std)
+
+        !if(reservoir%sst_bool_input) then
+        call read_netcdf_1d_dp_opened('leakage_slab',ncid,reservoir%leakage_slab)
+        !endif
 
         call nc_check(nf90_close(ncid))
 

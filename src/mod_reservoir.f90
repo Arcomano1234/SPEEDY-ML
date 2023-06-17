@@ -22,19 +22,19 @@ subroutine initialize_model_parameters(model_parameters,processor,num_of_procs)
    
    write_training_weights = .True.
 
-   model_parameters%num_predictions = 1
-   model_parameters%trial_name = '6000_20_20_20_sigma0.5_beta_res0.001_beta_model_1.0_prior_0.0_overlap1_vertlevel_1_precip_epsilon0.001_ohtc_test'!2kbias_10_year_then_platue_speedy_atmo_only' !14d_0.9rho_10noise_beta0.001_20years'  
+   model_parameters%num_predictions = 40
+   model_parameters%trial_name = '6000_20_20_20_sigma0.5_beta_res0.001_beta_model_1.0_prior_0.0_overlap1_vertlevel_1_precip_epsilon0.001_ohtc_multiple_leakage_test_oceantimestep_24hr_'!2kbias_10_year_then_platue_speedy_atmo_only' !14d_0.9rho_10noise_beta0.001_20years'  
    !model_parameters%trial_name = '6000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_4_vertlap_6_slab_ocean_model_true_precip_true'
    !'4000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_4_vertlap_2_full_timestep_1'
    !model_parameters%trial_name = '4000_20_20_20_beta_res0.01_beta_model_1.0_prior_0.0_overlap1_vertlevels_4_vertlap_2_full_test_climate_all_tisr_longer'
    model_parameters%trial_name_extra_end = ''!'climo_2kbias_10_year_then_platue_speedy_bc_atmo_no_ice_2k_sst_mean_20std_increase_'
 
    model_parameters%discardlength = 24*10!7
-   model_parameters%traininglength =  12000!227760 - 24*10 !- 40*24!166440 - 24*10  !87600*2+24*10!3+24*10!188280 !254040 !81600!188280!0!0!0!166600!81600 !00!58000!67000!77000
-   model_parameters%predictionlength = 8760*20!*70!8760*70!8760*3!1 + 24*5!8760*30 + 24*5!504!8760*11 + 24*5 !504!0
-   model_parameters%synclength = 24*14!*4 + 3*24!24*14*2 !+ 180*24
+   model_parameters%traininglength = 227760 - 24*10 !- 40*24!166440 - 24*10  !87600*2+24*10!3+24*10!188280 !254040 !81600!188280!0!0!0!166600!81600 !00!58000!67000!77000
+   model_parameters%predictionlength = 8760*2!*70!8760*70!8760*3!1 + 24*5!8760*30 + 24*5!504!8760*11 + 24*5 !504!0
+   model_parameters%synclength = 24*14*2*3!*4 + 3*24!24*14*2 !+ 180*24
    model_parameters%timestep = 6!1 !6
-   model_parameters%timestep_slab = 24*7!24*7!*14!*2!*7
+   model_parameters%timestep_slab = 24!*14!*2!*7
 
    global_time_step = model_parameters%timestep
 
@@ -300,24 +300,107 @@ subroutine train_reservoir(reservoir,grid,model_parameters)
 
    enddo
 
-   if((model_parameters%slab_ocean_model_bool).and.(grid%bottom)) then
-     if(allocated(reservoir%imperfect_model_states)) deallocate(reservoir%imperfect_model_states) 
-   else  
-     deallocate(reservoir%trainingdata)
-     if(allocated(reservoir%imperfect_model_states)) deallocate(reservoir%imperfect_model_states)
-   endif 
- 
    print *, 'fitting',reservoir%assigned_region
 
    if(model_parameters%ml_only) then
      call fit_chunk_ml(reservoir,model_parameters,grid)
    else
      call fit_chunk_hybrid(reservoir,model_parameters,grid)
-   endif 
+   endif
+
+   !Get training error of last batch
+   call training_error(reservoir,model_parameters,grid,reservoir%trainingdata(:,model_parameters%timestep:model_parameters%traininglength:model_parameters%timestep),reservoir%imperfect_model_states(:,model_parameters%timestep:model_parameters%traininglength:model_parameters%timestep))
+ 
+   if((model_parameters%slab_ocean_model_bool).and.(grid%bottom)) then
+     if(allocated(reservoir%imperfect_model_states)) deallocate(reservoir%imperfect_model_states)
+   else
+     deallocate(reservoir%trainingdata)
+     if(allocated(reservoir%imperfect_model_states)) deallocate(reservoir%imperfect_model_states)
+   endif
+
+ 
    print *, 'cleaning up', reservoir%assigned_region
    call clean_batch(reservoir)
  
 end subroutine 
+
+subroutine training_error(reservoir,model_parameters,grid,trainingdata,imperfect_model_states)
+   use mod_utilities, only: unstandardize_data_4d !, unstandardize_data_2d
+   use resdomain, only : tile_full_input_to_target_data, tile_4d_and_logp_state_vec_res1d
+   use mpires, only : killmpi, mpi_res
+   use mod_io, only : write_netcdf_parallel_mpi
+
+   type(reservoir_type), intent(inout)     :: reservoir
+   type(model_parameters_type), intent(in) :: model_parameters
+   type(grid_type), intent(in)             :: grid
+   real(kind=dp), intent(in)               :: trainingdata(:,:)
+   real(kind=dp), intent(in)               :: imperfect_model_states(:,:)
+
+   real(kind=dp), allocatable :: x_augment(:)
+   real(kind=dp), allocatable :: prediction(:,:)
+   real(kind=dp), allocatable :: targetdata(:,:)
+   real(kind=dp), allocatable :: grid5d_truth(:,:,:,:,:), grid3d_truth(:,:,:)
+   real(kind=dp), allocatable :: grid5d_prediction(:,:,:,:,:), grid3d_prediction(:,:,:)
+   real(kind=dp), allocatable :: grid5d_difference(:,:,:,:,:), grid3d_difference(:,:,:)
+
+   integer :: time_length
+   integer :: i
+   integer :: batch_number
+
+   time_length = size(reservoir%states,2)
+   batch_number = (size(trainingdata,2)-model_parameters%discardlength/model_parameters%timestep)/reservoir%batch_size !model_parameters%traininglength/model_parameters%timestep/reservoir%batch_size
+   print *, 'Calculated number of batches in training_error routine: ', batch_number
+   allocate(prediction(reservoir%chunk_size_prediction,time_length))
+   allocate(x_augment(reservoir%n+reservoir%chunk_size_speedy))
+
+   do i=1, time_length
+      x_augment(1:reservoir%chunk_size_speedy) = imperfect_model_states(:,model_parameters%discardlength/model_parameters%timestep+(batch_number-1)*time_length+i)
+      x_augment(reservoir%chunk_size_speedy+1:reservoir%chunk_size_speedy+reservoir%n) = reservoir%states(:,i)
+      prediction(:,i) = matmul(reservoir%wout,x_augment)
+   enddo
+
+   call tile_full_input_to_target_data(reservoir,grid,trainingdata(1:grid%predict_end,model_parameters%discardlength/model_parameters%timestep+(batch_number-1)*time_length+1:batch_number*time_length+model_parameters%discardlength/model_parameters%timestep),targetdata)
+
+   allocate(grid5d_truth(reservoir%local_predictvars,grid%resxchunk,grid%resychunk,grid%reszchunk,time_length))
+   allocate(grid3d_truth(grid%resxchunk,grid%resychunk,time_length))
+
+   allocate(grid5d_prediction(reservoir%local_predictvars,grid%resxchunk,grid%resychunk,grid%reszchunk,time_length))
+   allocate(grid3d_prediction(grid%resxchunk,grid%resychunk,time_length))
+
+   allocate(grid5d_difference(reservoir%local_predictvars,grid%resxchunk,grid%resychunk,grid%reszchunk,time_length))
+   allocate(grid3d_difference(grid%resxchunk,grid%resychunk,time_length))
+
+   do i=1,time_length
+      call tile_4d_and_logp_state_vec_res1d(reservoir,grid%number_of_regions,targetdata(:,i),reservoir%assigned_region,grid5d_truth(:,:,:,:,i),grid3d_truth(:,:,i))
+      call tile_4d_and_logp_state_vec_res1d(reservoir,grid%number_of_regions,prediction(:,i),reservoir%assigned_region,grid5d_prediction(:,:,:,:,i),grid3d_prediction(:,:,i))
+   enddo
+
+   if(reservoir%assigned_region==1) then
+    print *,'target data ',targetdata
+    print *,'prediction data ',prediction
+   endif
+   do i=1,time_length
+      call unstandardize_data_4d(reservoir,grid5d_truth(:,:,:,:,i),grid%mean,grid%std)
+      call unstandardize_data_4d(reservoir,grid5d_prediction(:,:,:,:,i),grid%mean,grid%std)
+      !call unstandardize_data_2d(grid3d_truth(:,:,i),grid%mean(grid%logp_mean_std_idx),grid%std(grid%logp_mean_std_idx))
+      !call unstandardize_data_2d(grid3d_prediction(:,:,i),grid%mean(grid%logp_mean_std_idx),grid%std(grid%logp_mean_std_idx))
+   enddo
+   if(reservoir%assigned_region==1) then
+    print *,'target data unstandardized ',targetdata
+    print *,'prediction data unstandardized ',prediction
+   endif
+   grid5d_difference = 0.0_dp
+   grid3d_difference = 0.0_dp
+
+   grid5d_difference = grid5d_prediction - grid5d_truth
+   grid3d_difference = grid3d_prediction - grid3d_truth
+
+   call write_netcdf_parallel_mpi(grid%res_xstart,grid%res_ystart,grid5d_difference,grid3d_difference,1,'training_error_'//model_parameters%trial_name//'.nc',mpi_res,.True.)
+   call write_netcdf_parallel_mpi(grid%res_xstart,grid%res_ystart,grid5d_prediction,grid3d_prediction,1,'training_prediction_'//model_parameters%trial_name//'.nc',mpi_res,.True.)
+   call write_netcdf_parallel_mpi(grid%res_xstart,grid%res_ystart,grid5d_truth,grid3d_truth,1,'training_truth_'//model_parameters%trial_name//'.nc',mpi_res,.True.)
+   deallocate(reservoir%states)
+end subroutine
+
 
 subroutine get_training_data(reservoir,model_parameters,grid,loop_index)
    use mod_utilities, only : era_data_type, speedy_data_type, &
@@ -815,7 +898,7 @@ subroutine initialize_prediction(reservoir,model_parameters,grid)
    !Try syncing on un-noisy data
    if(.not.(allocated(reservoir%saved_state))) allocate(reservoir%saved_state(reservoir%n))
    reservoir%saved_state = 0
-   un_noisy_sync = 2160!700
+   un_noisy_sync = 24*364 !98!2160!700
 
    !From this point on reservoir%trainingdata and reservoir%imperfect_model have a temporal resolution of 1
    !hour instead of a resolution of model_parameters%timestep
@@ -1714,7 +1797,7 @@ subroutine write_trained_res(reservoir,model_parameters,grid)
 
   integer :: i 
 
-  file_path = '/scratch/user/troyarcomano/ML_SPEEDY_WEIGHTS/'
+  file_path = '/scratch/user/dpp94/ML_SPEEDY_WEIGHTS/'
 
   write(worker_char,'(i0.4)') reservoir%assigned_region
   write(height_char,'(i0.1)') grid%level_index
@@ -1743,7 +1826,7 @@ subroutine write_controller_file(model_parameters,reservoir)
 
    character(len=:), allocatable :: file_path
 
-   file_path = '/scratch/user/troyarcomano/ML_SPEEDY_WEIGHTS/'//trim(model_parameters%trial_name)//'_controller_file.txt'
+   file_path = '/scratch/user/dpp94/ML_SPEEDY_WEIGHTS/'//trim(model_parameters%trial_name)//'_controller_file.txt'
  
    open (10, file=file_path, status='unknown')
 

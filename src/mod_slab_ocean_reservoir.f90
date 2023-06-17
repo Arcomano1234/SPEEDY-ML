@@ -25,11 +25,11 @@ subroutine initialize_slab_ocean_model(reservoir,grid,model_parameters)
 
   model_parameters%ml_only_ocean = .True.
 
-  reservoir%m = 4000!6000
+  reservoir%m = 6000
 
   reservoir%deg = 6
   reservoir%radius = 0.9
-  reservoir%beta_res = 0.0001_dp
+  reservoir%beta_res = 100.0_dp!0.0001_dp
   reservoir%beta_model = 1.0_dp
   reservoir%sigma = 0.6_dp !0.5_dp
 
@@ -39,7 +39,8 @@ subroutine initialize_slab_ocean_model(reservoir,grid,model_parameters)
 
   reservoir%noisemag = 0.10
 
-  reservoir%leakage = 1.0_dp!/14.0_dp !/4.0_dp !12.0_dp
+  reservoir%leakage_slab_lower = 1.0_dp/30.0_dp !/4.0_dp !12.0_dp
+  reservoir%leakage_slab_upper = 1.0_dp
 
   !call set_reservoir_by_region(reservoir,grid)
 
@@ -188,6 +189,8 @@ subroutine train_slab_ocean_model(reservoir,grid,model_parameters)
 
    character(len=:), allocatable :: base_trial_name
    character(len=50) :: beta_res_char,beta_model_char,prior_char
+
+   real(kind=dp)  :: temp
      
    call gen_res(reservoir)
 
@@ -208,6 +211,25 @@ subroutine train_slab_ocean_model(reservoir,grid,model_parameters)
       
       reservoir%win((i-1)*q+1:i*q,i) = reservoir%sigma*ip
    enddo
+
+   allocate(reservoir%leakage_slab(reservoir%n))
+  
+   do i=1,reservoir%n
+      call random_number(temp)
+      temp = 3.0_dp*temp - 3.0_dp
+      reservoir%leakage_slab(i) = 10.0_dp ** temp
+      !if(i < (reservoir%n/3)) then !(temp > 0.5) then
+      !  reservoir%leakage_slab(i) = reservoir%leakage_slab_lower
+      !elseif((i > (reservoir%n/3)) .and. (i < (2*reservoir%n/3))) then
+      !  reservoir%leakage_slab(i) = 1.0_dp / 7.0_dp
+      !else
+      !  reservoir%leakage_slab(i) = reservoir%leakage_slab_upper
+      !endif
+   enddo
+   
+   if(reservoir%assigned_region == 690) then
+     print *, 'reservoir%leakage_slab ,', reservoir%leakage_slab
+   endif
    
    deallocate(rand)
    deallocate(ip) 
@@ -248,13 +270,6 @@ subroutine train_slab_ocean_model(reservoir,grid,model_parameters)
 
    enddo
 
-   
-   !TODO NOTE need to change this !deallocate(reservoir%trainingdata)
-    
-   if(.not. model_parameters%ml_only_ocean) then
-     deallocate(reservoir%imperfect_model_states)
-   endif 
- 
    print *, 'fitting slab',reservoir%assigned_region
 
    if(model_parameters%ml_only_ocean) then
@@ -263,9 +278,109 @@ subroutine train_slab_ocean_model(reservoir,grid,model_parameters)
      call fit_chunk_hybrid(reservoir,model_parameters,grid)
    endif
 
+   !TODO NOTE need to change this !deallocate(reservoir%trainingdata)
+   if(.not. model_parameters%ml_only_ocean) then
+     deallocate(reservoir%imperfect_model_states)
+   endif
+
+   call training_error(reservoir,model_parameters,grid,reservoir%trainingdata(:,model_parameters%timestep_slab:model_parameters%traininglength:model_parameters%timestep_slab))
+
    print *, 'cleaning up', reservoir%assigned_region
    call clean_batch(reservoir)
  
+end subroutine
+
+subroutine training_error(reservoir,model_parameters,grid,trainingdata)
+   use mod_utilities, only: unstandardize_data_2d 
+   use resdomain, only : tile_full_input_to_target_data_ocean_model, tile_3d_state_vec_res1d_ocean
+   use mpires, only : killmpi, mpi_res
+   use mod_io, only : write_netcdf_parallel_mpi_ocean
+
+   type(reservoir_type), intent(inout)     :: reservoir
+   type(model_parameters_type), intent(in) :: model_parameters
+   type(grid_type), intent(in)             :: grid
+   real(kind=dp), intent(in)               :: trainingdata(:,:)
+
+   !real(kind=dp), allocatable :: x_augment(:)
+   real(kind=dp), allocatable :: prediction(:,:)
+   real(kind=dp), allocatable :: targetdata(:,:)
+   real(kind=dp), allocatable :: grid4d_truth(:,:,:,:) !, grid3d_truth(:,:,:)
+   real(kind=dp), allocatable :: grid4d_prediction(:,:,:,:) !, grid3d_prediction(:,:,:)
+   real(kind=dp), allocatable :: grid4d_difference(:,:,:,:) !, grid3d_difference(:,:,:)
+
+   integer :: time_length
+   integer :: i
+   integer :: batch_number
+   integer :: num_vars
+
+   time_length = size(reservoir%states,2)
+   batch_number = (size(trainingdata,2)-model_parameters%discardlength/model_parameters%timestep_slab)/reservoir%batch_size !model_parameters%traininglength/model_parameters%timestep_slab/reservoir%batch_size
+
+   allocate(prediction(reservoir%chunk_size_prediction,time_length))
+   !allocate(x_augment(reservoir%n+reservoir%chunk_size_prediction))
+
+   do i=1, time_length
+      !x_augment(1:reservoir%chunk_size_prediction) = imperfect_model_states(:,model_parameters%discardlength/model_parameters%timestep_slab+(batch_number-1)*time_length+i)
+      !x_augment(reservoir%chunk_size_prediction+1:reservoir%chunk_size_prediction+reservoir%n)= reservoir%states(:,i)
+      prediction(:,i) = matmul(reservoir%wout,reservoir%states(:,i))
+   enddo
+
+   call tile_full_input_to_target_data_ocean_model(reservoir,grid,trainingdata(:,model_parameters%discardlength/model_parameters%timestep_slab+(batch_number-1)*time_length+1:batch_number*time_length+model_parameters%discardlength/model_parameters%timestep_slab),targetdata)
+
+   if(reservoir%ohtc_prediction) then
+     num_vars = 2
+   else
+     num_vars = 1
+   endif
+
+   allocate(grid4d_truth(num_vars,grid%resxchunk,grid%resychunk,time_length))
+   !allocate(grid3d_truth(grid%resxchunk,grid%resychunk,time_length))
+
+   allocate(grid4d_prediction(num_vars,grid%resxchunk,grid%resychunk,time_length))
+   !allocate(grid3d_prediction(grid%resxchunk,grid%resychunk,time_length))
+
+   allocate(grid4d_difference(num_vars,grid%resxchunk,grid%resychunk,time_length))
+   !allocate(grid3d_difference(grid%resxchunk,grid%resychunk,time_length))
+
+   do i=1, time_length
+      call tile_3d_state_vec_res1d_ocean(model_parameters,reservoir%assigned_region,targetdata(:,i),grid4d_truth(:,:,:,i))
+      call tile_3d_state_vec_res1d_ocean(model_parameters,reservoir%assigned_region,prediction(:,i),grid4d_prediction(:,:,:,i))
+   enddo
+
+   if(reservoir%assigned_region==1) then
+    print *,'target data ',targetdata
+    print *,'prediction data ',prediction
+   endif
+
+   do i=1,time_length
+      call unstandardize_data_2d(grid4d_truth(1,:,:,i),grid%mean(grid%sst_mean_std_idx),grid%std(grid%sst_mean_std_idx))
+      call unstandardize_data_2d(grid4d_prediction(1,:,:,i),grid%mean(grid%sst_mean_std_idx),grid%std(grid%sst_mean_std_idx))
+      if(reservoir%ohtc_prediction) then
+        call unstandardize_data_2d(grid4d_truth(2,:,:,i),grid%mean(grid%ohtc_mean_std_idx),grid%std(grid%ohtc_mean_std_idx))
+        call unstandardize_data_2d(grid4d_prediction(2,:,:,i),grid%mean(grid%ohtc_mean_std_idx),grid%std(grid%ohtc_mean_std_idx))
+      endif
+   enddo
+
+   if(reservoir%assigned_region==578) then
+    print *, 'mod_slab.training_error. grid%mean(grid%sst_mean_std_idx), grid%std(grid%sst_mean_std_idx) ', grid%mean(grid%sst_mean_std_idx), grid%std(grid%sst_mean_std_idx)
+    print *,'mod_slab.training_error. grid%mean(grid%ohtc_mean_std_idx), grid%std(grid%ohtc_mean_std_idx) ', grid%mean(grid%ohtc_mean_std_idx), grid%std(grid%ohtc_mean_std_idx)
+   endif
+
+   if(reservoir%assigned_region==1) then
+    print *,'target data unstandardized ',targetdata
+    print *,'prediction data unstandardized ',prediction
+   endif
+
+   grid4d_difference = 0.0_dp
+   !grid3d_difference = 0.0_dp
+
+   grid4d_difference = grid4d_prediction - grid4d_truth
+   !grid3d_difference = grid3d_prediction - grid3d_truth
+   print *, 'Writing data to disk now'
+   call write_netcdf_parallel_mpi_ocean(model_parameters,grid%res_xstart,grid%res_ystart,1,'training_error_ocean_'//model_parameters%trial_name//'.nc',mpi_res,.True.,grid4d=grid4d_difference)
+   call write_netcdf_parallel_mpi_ocean(model_parameters,grid%res_xstart,grid%res_ystart,1,'training_prediction_ocean_'//model_parameters%trial_name//'.nc',mpi_res,.True.,grid4d=grid4d_prediction)
+   call write_netcdf_parallel_mpi_ocean(model_parameters,grid%res_xstart,grid%res_ystart,1,'training_truth_ocean_'//model_parameters%trial_name//'.nc',mpi_res,.True.,grid4d=grid4d_truth)
+   deallocate(reservoir%states)
 end subroutine 
 
 subroutine get_training_data_from_atmo(reservoir,model_parameters,grid,reservoir_atmo,grid_atmo)
@@ -305,6 +420,7 @@ subroutine get_training_data_from_atmo(reservoir,model_parameters,grid,reservoir
       print *, 'reading in read_ohtc_parallel_training'
       call read_ohtc_parallel_training(reservoir,model_parameters,grid,ohtc_var,size(reservoir_atmo%trainingdata,2))
    endif
+   if(reservoir%assigned_region == 690) print *, 'region, ohtc_var(:,:,100)', reservoir%assigned_region, ohtc_var(:,:,100)
 
    !Only continue if this region of the global contains SSTs  
    if(reservoir%sst_bool_prediction) then  
@@ -361,7 +477,11 @@ subroutine get_training_data_from_atmo(reservoir,model_parameters,grid,reservoir
 
      allocate(reservoir%trainingdata(sst_res_input_size,size(reservoir_atmo%trainingdata,2)))
 
-     allocate(reservoir%atmo_training_data_idx(sst_res_input_size))
+     if(reservoir%ohtc_prediction) then
+       allocate(reservoir%atmo_training_data_idx(sst_res_input_size - grid_atmo%inputxchunk*grid_atmo%inputychunk))
+     else
+       allocate(reservoir%atmo_training_data_idx(sst_res_input_size))
+     endif
 
      counter = 0
      do i=grid_atmo%atmo3d_end-grid_atmo%inputxchunk*grid_atmo%inputychunk*reservoir_atmo%local_predictvars+1,grid_atmo%logp_end
@@ -391,13 +511,13 @@ subroutine get_training_data_from_atmo(reservoir,model_parameters,grid,reservoir
      print *, 'size ohtc_var',shape(ohtc_var)
      print *, 'shape reservoir%trainingdata', shape(reservoir%trainingdata)
      if(reservoir%ohtc_prediction) then
-       reservoir%trainingdata(grid%ohtc_start:grid%ohtc_end,:) = reshape(ohtc_var(:,:,1:size(reservoir%trainingdata,2)),(/reservoir%ohtc_input_size,size(reservoir%trainingdata,2)/))
-     endif      
- 
+       reservoir%trainingdata(grid%ohtc_start:grid%ohtc_end,:) = reshape(ohtc_var(:,:,1:size(reservoir%trainingdata,2)),(/grid%ohtc_end-grid%ohtc_start+1,size(reservoir%trainingdata,2)/))
+     endif     
+
      if(reservoir%assigned_region == 10) print *, 'before reservoir%trainingdata(grid%sst_start,1:100)',reservoir%trainingdata(grid%sst_start,1:100)
-     call rolling_average_over_a_period_2d(reservoir%trainingdata(grid%atmo3d_start:grid%logp_end,:),model_parameters%timestep_slab) 
+     call rolling_average_over_a_period_2d(reservoir%trainingdata,model_parameters%timestep_slab) !reservoir%trainingdata(grid%atmo3d_start:grid%logp_end,:),model_parameters%timestep_slab) 
      if(reservoir%assigned_region == 10) print *, 'after reservoir%trainingdata(grid%sst_start,1:100)',reservoir%trainingdata(grid%sst_start,1:100)
-     !print *, 'better slab training data',reservoir%trainingdata(:,1000)
+     !if(reservoir%assigned_region == 10) print *, 'slab training data = 100',reservoir%trainingdata(:,100)
   endif 
 
   if(allocated(ohtc_var)) deallocate(ohtc_var)
@@ -409,6 +529,7 @@ subroutine get_prediction_data_from_atmo(reservoir,model_parameters,grid,reservo
    use mod_calendar
    use speedy_res_interface, only : read_era, read_model_states
    use resdomain, only : standardize_speedy_data
+   use mpires
 
    type(reservoir_type), intent(inout)        :: reservoir, reservoir_atmo
    type(model_parameters_type), intent(inout) :: model_parameters
@@ -427,9 +548,10 @@ subroutine get_prediction_data_from_atmo(reservoir,model_parameters,grid,reservo
     !Parallel IO requires all of the cpus to call this function
    if(model_parameters%ohtc_bool_input) then
       print *, 'reading in read_ohtc_parallel_prediction'
+      !print *, 'mod_slab/get_prediction_data_from_atmo. start_idx, size(reservoir_atmo%predictiondata,2)*model_parameters%timestep ', start_idx, size(reservoir_atmo%predictiondata,2)*model_parameters%timestep
       call read_ohtc_parallel_prediction(reservoir,model_parameters,grid,ohtc_var,start_idx,size(reservoir_atmo%predictiondata,2)*model_parameters%timestep)
    endif
-
+   
    if(reservoir%sst_bool_prediction) then
 
      atmo_ocean_tstep_ratio = model_parameters%timestep_slab/model_parameters%timestep
@@ -449,7 +571,7 @@ subroutine get_prediction_data_from_atmo(reservoir,model_parameters,grid,reservo
      !Remember reservoir_atmo%predictiondata has a time resolution of
      !model_parameters%timestep so its not hourly (probably)
       allocate(temp,source = reservoir_atmo%predictiondata)
-      call rolling_average_over_a_period_2d(temp(grid%atmo3d_start:grid%logp_end,:),atmo_ocean_tstep_ratio)
+      call rolling_average_over_a_period_2d(temp,atmo_ocean_tstep_ratio) !temp(grid%atmo3d_start:grid%logp_end,:),atmo_ocean_tstep_ratio)
  
      reservoir%predictiondata(grid%atmo3d_start:grid%logp_end,:) = temp(grid_atmo%atmo3d_end - grid_atmo%inputxchunk*grid_atmo%inputychunk*reservoir_atmo%local_predictvars+1:grid_atmo%logp_end,1:size(reservoir_atmo%predictiondata,2):atmo_ocean_tstep_ratio)
      reservoir%predictiondata(grid%sst_start:grid%sst_end,:) = temp(grid_atmo%sst_start:grid_atmo%sst_end,1:size(reservoir_atmo%predictiondata,2):atmo_ocean_tstep_ratio)
@@ -472,8 +594,16 @@ subroutine get_prediction_data_from_atmo(reservoir,model_parameters,grid,reservo
        print *, 'reservoir%ohtc_input_size,size(reservoir_atmo%predictiondata,2)',reservoir%ohtc_input_size,size(reservoir%predictiondata,2)
        print *, 'shape(ohtc_var(:,:,1:size(ohtc_var,3):size(ohtc_var,3)/size(reservoir_atmo%predictiondata,2)))',shape(ohtc_var(:,:,1:size(ohtc_var,3):model_parameters%timestep_slab))
        
-       reservoir%predictiondata(grid%ohtc_start:grid%ohtc_end,:) = reshape(ohtc_var(:,:,1:size(ohtc_var,3):model_parameters%timestep_slab),(/reservoir%ohtc_input_size,size(reservoir%predictiondata,2)/))
-      
+       allocate(temp(reservoir%ohtc_input_size,size(reservoir_atmo%predictiondata,2)))
+       temp = reshape(ohtc_var(:,:,1:size(ohtc_var,3):model_parameters%timestep), (/reservoir%ohtc_input_size,size(reservoir_atmo%predictiondata,2)/))
+       
+       call rolling_average_over_a_period_2d(temp,atmo_ocean_tstep_ratio)
+
+       reservoir%predictiondata(grid%ohtc_start:grid%ohtc_end,:) = temp(:,1:size(temp,2):atmo_ocean_tstep_ratio)
+
+       deallocate(temp)
+
+       !reservoir%predictiondata(grid%ohtc_start:grid%ohtc_end,:) = reshape(ohtc_var(:,:,1:size(ohtc_var,3):model_parameters%timestep_slab),(/reservoir%ohtc_input_size,size(reservoir%predictiondata,2)/))
      endif
 
      print *, 'shape(reservoir%predictiondata) slab',shape(reservoir%predictiondata)
@@ -677,6 +807,8 @@ subroutine get_prediction_data(reservoir,model_parameters,grid,start_index,lengt
 
    call get_current_time_delta_hour(calendar,start_index+length) 
 
+   !print *, 'mod_slab/get_prediction_data. start_index, length ', start_index, length
+   !print *, 'mod_slab/get_prediction_data. start_year, calendar%currentyear ', start_year, calendar%currentyear
    !Read data in stride and whats only needed for this loop of training
    call read_era(reservoir,grid,model_parameters,start_year,calendar%currentyear,era_data,1)
 
@@ -763,6 +895,7 @@ end subroutine
 
 subroutine initialize_prediction_slab(reservoir,model_parameters,grid,atmo_reservoir,atmo_grid)
    use mod_calendar
+   use mpires
    
    type(reservoir_type), intent(inout)        :: reservoir
    type(grid_type), intent(inout)             :: grid 
@@ -786,16 +919,26 @@ subroutine initialize_prediction_slab(reservoir,model_parameters,grid,atmo_reser
    !Try syncing on un-noisy data
    if(.not.(allocated(reservoir%saved_state))) allocate(reservoir%saved_state(reservoir%n))
    reservoir%saved_state = 0
-   un_noisy_sync = 2160!700
+   un_noisy_sync = 24*364!98!2160!700
 
    !From this point on reservoir%trainingdata and reservoir%imperfect_model have a temporal resolution model_parameters%timestep_slab
    !instead of 1 hour resolution and atmo_reservoir%trainingdata has a temporal
    !resolution model_parameters%timestep
-   call get_prediction_data_from_atmo(reservoir,model_parameters,grid,atmo_reservoir,atmo_grid,model_parameters%traininglength-un_noisy_sync)
+   !print *, 'mod_slab/initialize_prediction_slab. model_parameters%traininglength-un_noisy_sync ', model_parameters%traininglength-un_noisy_sync
 
+   call get_prediction_data_from_atmo(reservoir,model_parameters,grid,atmo_reservoir,atmo_grid,model_parameters%traininglength-un_noisy_sync)
+   !print *, 'Finished get_prediction_data_from_atmo' 
    if(reservoir%sst_bool_prediction) then
      print *, 'shape(reservoir%predictiondata)',shape(reservoir%predictiondata),'shape(reservoir%win)',shape(reservoir%win),'un_noisy_sync/(model_parameters%timestep_slab)-1',un_noisy_sync/(model_parameters%timestep_slab)-1
-     call synchronize(reservoir,reservoir%predictiondata,reservoir%saved_state,un_noisy_sync/(model_parameters%timestep_slab)-1)
+
+     !call synchronize(reservoir,reservoir%predictiondata,reservoir%saved_state,un_noisy_sync/(model_parameters%timestep_slab)-1)
+     call synchronize_error_unnoisysync(reservoir,model_parameters,grid,reservoir%predictiondata,reservoir%saved_state,un_noisy_sync/(model_parameters%timestep_slab)-1)
+
+     if(reservoir%assigned_region == 578) then
+       print *, 'mod_slab.initialize_prediction. region num', reservoir%assigned_region
+       print *, 'mod_slab.initialize_prediction. reservoir%saved_state at end of synchronize_error_unnoisysyc ', reservoir%saved_state
+       print *, 'mod_slab.initialize_prediction. reservoir%predictiondata(:,un_noisy_sync/model_parameters%timestep_slab) ', reservoir%predictiondata(:,un_noisy_sync/model_parameters%timestep_slab)
+     endif
 
      if(reservoir%tisr_input_bool) then
        allocate(reservoir%full_tisr,source=atmo_reservoir%full_tisr)
@@ -806,8 +949,8 @@ subroutine initialize_prediction_slab(reservoir,model_parameters,grid,atmo_reser
      allocate(reservoir%local_model(reservoir%chunk_size_prediction))
      allocate(reservoir%outvec(reservoir%chunk_size_prediction))
      allocate(reservoir%feedback(reservoir%reservoir_numinputs))
-     !allocate(reservoir%averaged_atmo_input_vec(reservoir%reservoir_numinputs,model_parameters%timestep_slab/model_parameters%timestep-1))
-     allocate(reservoir%averaged_atmo_input_vec(grid%logp_end,model_parameters%timestep_slab/model_parameters%timestep-1))
+     allocate(reservoir%averaged_atmo_input_vec(reservoir%reservoir_numinputs,model_parameters%timestep_slab/model_parameters%timestep-1))
+     !allocate(reservoir%averaged_atmo_input_vec(grid%logp_end,model_parameters%timestep_slab/model_parameters%timestep-1))
      reservoir%averaged_atmo_input_vec = 0.0_dp  
    endif 
 end subroutine 
@@ -843,12 +986,21 @@ subroutine start_prediction_slab(reservoir,model_parameters,grid,atmo_reservoir,
 
    call get_prediction_data_from_atmo(reservoir,model_parameters,grid,atmo_reservoir,atmo_grid,model_parameters%traininglength+model_parameters%prediction_markers(prediction_number),.False.)
 
+   if(reservoir%assigned_region == 578) then
+     print *, 'region num ', reservoir%assigned_region
+     print *, 'reservoir%saved_state at start of start_prediction_slab ', reservoir%saved_state
+     print *, 'reservoir%predictiondata(:,2) ', reservoir%predictiondata(:,2)
+   endif
+ 
+
    if(reservoir%sst_bool_prediction) then
-     call synchronize(reservoir,reservoir%predictiondata(:,1:model_parameters%synclength/model_parameters%timestep_slab),reservoir%saved_state,model_parameters%synclength/model_parameters%timestep_slab)
+     !call synchronize(reservoir,reservoir%predictiondata(:,1:model_parameters%synclength/model_parameters%timestep_slab),reservoir%saved_state,model_parameters%synclength/model_parameters%timestep_slab-1)
+     call synchronize_error_sync(reservoir,model_parameters,grid,reservoir%predictiondata(:,2:1+model_parameters%synclength/model_parameters%timestep_slab),reservoir%saved_state,model_parameters%synclength/model_parameters%timestep_slab-1) 
 
      print *, 'model_parameters%synclength/model_parameters%timestep_slab',model_parameters%synclength/model_parameters%timestep_slab
      print *, 'shape(reservoir%predictiondata)',shape(reservoir%predictiondata)
      reservoir%feedback = reservoir%predictiondata(:,model_parameters%synclength/model_parameters%timestep_slab)
+     if(reservoir%assigned_region == 411) print *, 'mod_slab.start_prediction. reservoir%feedback', reservoir%feedback
   
      !This is a trick so that we can store the last sst era5 data for plotting
      !when the hybrid model intergration step is less than the slab_timestep
@@ -890,12 +1042,12 @@ subroutine reservoir_layer_chunking_ml(reservoir,model_parameters,grid,trainingd
    y = 0
    do i=1, model_parameters%discardlength/model_parameters%timestep_slab
       info = MKL_SPARSE_D_MV(SPARSE_OPERATION_NON_TRANSPOSE,alpha,reservoir%cooA,reservoir%descrA,x,beta,y)
-      print *, 'shape(reservoir%win)',shape(reservoir%win),'shape(trainingdata(:,i))',shape(trainingdata(:,i)), 'worker',reservoir%assigned_region
+      !print *, 'shape(reservoir%win)',shape(reservoir%win),'shape(trainingdata(:,i))',shape(trainingdata(:,i)), 'worker',reservoir%assigned_region
       temp = matmul(reservoir%win,gaussian_noise_1d_function(trainingdata(:,i),reservoir%noisemag))
       
       x_ = tanh(y+temp)
 
-      x = (1_dp-reservoir%leakage)*x + reservoir%leakage*x_
+      x = (1_dp-reservoir%leakage_slab)*x + reservoir%leakage_slab*x_
 
       y = 0
    enddo
@@ -917,7 +1069,7 @@ subroutine reservoir_layer_chunking_ml(reservoir,model_parameters,grid,trainingd
         temp = matmul(reservoir%win,gaussian_noise_1d_function(trainingdata(:,model_parameters%discardlength/model_parameters%timestep_slab+i),reservoir%noisemag))
 
         x_ = tanh(y+temp)
-        x = (1-reservoir%leakage)*x + reservoir%leakage*x_
+        x = (1-reservoir%leakage_slab)*x + reservoir%leakage_slab*x_
 
         reservoir%states(:,reservoir%batch_size) = x
 
@@ -934,7 +1086,7 @@ subroutine reservoir_layer_chunking_ml(reservoir,model_parameters,grid,trainingd
         temp = matmul(reservoir%win,gaussian_noise_1d_function(trainingdata(:,model_parameters%discardlength/model_parameters%timestep_slab+i),reservoir%noisemag)) 
          
         x_ = tanh(y+temp)
-        x = (1-reservoir%leakage)*x + reservoir%leakage*x_
+        x = (1-reservoir%leakage_slab)*x + reservoir%leakage_slab*x_
 
         reservoir%states(:,1) = x
       else 
@@ -942,7 +1094,7 @@ subroutine reservoir_layer_chunking_ml(reservoir,model_parameters,grid,trainingd
         temp = matmul(reservoir%win,gaussian_noise_1d_function(trainingdata(:,model_parameters%discardlength/model_parameters%timestep_slab+i),reservoir%noisemag))
 
         x_ = tanh(y+temp)
-        x = (1-reservoir%leakage)*x + reservoir%leakage*x_
+        x = (1-reservoir%leakage_slab)*x + reservoir%leakage_slab*x_
 
         reservoir%states(:,mod(i+1,reservoir%batch_size)) = x
       endif 
@@ -1258,12 +1410,212 @@ subroutine synchronize(reservoir,input,x,length)
        temp = matmul(reservoir%win,input(:,i))
 
        x_ = tanh(y+temp)
-       x = (1-reservoir%leakage)*x + reservoir%leakage*x_
+       x = (1-reservoir%leakage_slab)*x + reservoir%leakage_slab*x_
 
     enddo 
     
     return 
 end subroutine  
+
+subroutine synchronize_error_unnoisysync(reservoir,model_parameters,grid,input,x,length)
+    use resdomain, only: tile_full_input_to_target_data_ocean_model, tile_3d_state_vec_res1d_ocean
+    use mod_utilities, only: unstandardize_data_2d
+    use mpires, only: killmpi, mpi_res
+    use mod_io, only: write_netcdf_parallel_mpi_ocean
+
+    type(reservoir_type), intent(inout)     :: reservoir
+    type(model_parameters_type), intent(in) :: model_parameters
+    type(grid_type), intent(in)             :: grid
+
+    real(kind=dp), intent(in)           :: input(:,:)
+    real(kind=dp), intent(inout)        :: x(:)
+
+    integer, intent(in)                 :: length
+
+    real(kind=dp), allocatable          :: y(:), temp(:), x_(:), x_augment(:), prediction(:,:), targetdata(:,:)
+    real(kind=dp), allocatable          :: grid4d_truth(:,:,:,:)
+    real(kind=dp), allocatable          :: grid4d_prediction(:,:,:,:)
+    real(kind=dp), allocatable          :: grid4d_difference(:,:,:,:)
+    real(kind=dp), parameter            :: alpha=1.0, beta=0.0
+
+    integer                             :: info, i, num_vars
+
+    allocate(y(reservoir%n))
+    allocate(temp(reservoir%n))
+    allocate(x_(reservoir%n))
+
+    y=0
+
+    call tile_full_input_to_target_data_ocean_model(reservoir,grid,input,targetdata)
+
+    allocate(prediction(size(targetdata,1),length+1))
+    prediction(:,1) = targetdata(:,1)
+
+    do i=1, length
+       info = MKL_SPARSE_D_MV(SPARSE_OPERATION_NON_TRANSPOSE,alpha,reservoir%cooA,reservoir%descrA,x,beta,y)
+
+       temp = matmul(reservoir%win,input(:,i))
+
+       x_ = tanh(y+temp)
+       x = (1-reservoir%leakage_slab)*x + reservoir%leakage_slab*x_
+
+       x_augment = x
+       x_augment(2:reservoir%n:2) = x_augment(2:reservoir%n:2)**2
+
+       prediction(:,i+1) = matmul(reservoir%wout,x_augment)
+    enddo
+
+    if(reservoir%ohtc_prediction) then
+      num_vars = 2
+    else
+      num_vars = 1
+    endif 
+
+    allocate(grid4d_truth(num_vars,grid%resxchunk,grid%resychunk,length))
+
+    allocate(grid4d_prediction(num_vars,grid%resxchunk,grid%resychunk,length))
+
+    allocate(grid4d_difference(num_vars,grid%resxchunk,grid%resychunk,length))
+
+    do i=1,length
+       call tile_3d_state_vec_res1d_ocean(model_parameters,reservoir%assigned_region,targetdata(:,i),grid4d_truth(:,:,:,i))
+       call tile_3d_state_vec_res1d_ocean(model_parameters,reservoir%assigned_region,prediction(:,i),grid4d_prediction(:,:,:,i))
+    enddo
+
+   !if(reservoir%assigned_region==1) then
+    !print *,'target data ',targetdata
+    !print *,'prediction data ',prediction
+   !endif
+
+    do i=1,length
+       call unstandardize_data_2d(grid4d_truth(1,:,:,i),grid%mean(grid%sst_mean_std_idx),grid%std(grid%sst_mean_std_idx))
+       call unstandardize_data_2d(grid4d_prediction(1,:,:,i),grid%mean(grid%sst_mean_std_idx),grid%std(grid%sst_mean_std_idx))
+       if(reservoir%ohtc_prediction) then
+         call unstandardize_data_2d(grid4d_truth(2,:,:,i),grid%mean(grid%ohtc_mean_std_idx),grid%std(grid%ohtc_mean_std_idx))
+         call unstandardize_data_2d(grid4d_prediction(2,:,:,i),grid%mean(grid%ohtc_mean_std_idx),grid%std(grid%ohtc_mean_std_idx))
+       endif
+    enddo
+
+    if(reservoir%assigned_region==578) then
+      print *, 'mod_slab.unnoisysync_error. grid%mean(grid%sst_mean_std_idx), grid%std(grid%sst_mean_std_idx) ', grid%mean(grid%sst_mean_std_idx), grid%std(grid%sst_mean_std_idx)
+      print *, 'mod_slab.unnoisysync_error. grid%mean(grid%ohtc_mean_std_idex), grid%std(grid%ohtc_mean_std_idx) ', grid%mean(grid%ohtc_mean_std_idx), grid%std(grid%ohtc_mean_std_idx)
+    endif
+
+    if(reservoir%assigned_region==1) then
+      print *,'target data unstandardized ',targetdata
+      print *,'prediction data unstandardized ',prediction
+    endif
+
+    grid4d_difference = 0.0_dp
+
+    grid4d_difference = grid4d_prediction - grid4d_truth
+   print *, 'Writing data to disk now'
+   print *, 'grid%res_xstart, grid%res_ystart', grid%res_xstart, grid%res_ystart
+   call write_netcdf_parallel_mpi_ocean(model_parameters,grid%res_xstart,grid%res_ystart,1,'vanilla_unnoisysync_error_ocean_'//model_parameters%trial_name//'.nc',mpi_res,.True.,grid4d=grid4d_difference)
+   call write_netcdf_parallel_mpi_ocean(model_parameters,grid%res_xstart,grid%res_ystart,1,'vanilla_unnoisysync_prediction_ocean_'//model_parameters%trial_name//'.nc',mpi_res,.True.,grid4d=grid4d_prediction)
+   call write_netcdf_parallel_mpi_ocean(model_parameters,grid%res_xstart,grid%res_ystart,1,'vanilla_unnoisysync_truth_ocean_'//model_parameters%trial_name//'.nc',mpi_res,.True.,grid4d=grid4d_truth)
+
+end subroutine
+
+subroutine synchronize_error_sync(reservoir,model_parameters,grid,input,x,length)
+    use resdomain, only: tile_full_input_to_target_data_ocean_model, tile_3d_state_vec_res1d_ocean
+    use mod_utilities, only: unstandardize_data_2d
+    use mpires, only: killmpi, mpi_res
+    use mod_io, only: write_netcdf_parallel_mpi_ocean
+
+    type(reservoir_type), intent(inout)     :: reservoir
+    type(model_parameters_type), intent(in) :: model_parameters
+    type(grid_type), intent(in)             :: grid
+
+    real(kind=dp), intent(in)           :: input(:,:)
+    real(kind=dp), intent(inout)        :: x(:)
+
+    integer, intent(in)                 :: length
+
+    real(kind=dp), allocatable          :: y(:), temp(:), x_(:), x_augment(:), prediction(:,:), targetdata(:,:)
+    real(kind=dp), allocatable          :: grid4d_truth(:,:,:,:)
+    real(kind=dp), allocatable          :: grid4d_prediction(:,:,:,:)
+    real(kind=dp), allocatable          :: grid4d_difference(:,:,:,:)
+    real(kind=dp), parameter            :: alpha=1.0, beta=0.0
+
+    integer                             :: info, i, num_vars
+
+    allocate(y(reservoir%n))
+    allocate(temp(reservoir%n))
+    allocate(x_(reservoir%n))
+
+    y=0
+
+    call tile_full_input_to_target_data_ocean_model(reservoir,grid,input,targetdata)
+
+    allocate(prediction(size(targetdata,1),length+1))
+    prediction(:,1) = targetdata(:,1)
+
+    do i=1, length
+       info = MKL_SPARSE_D_MV(SPARSE_OPERATION_NON_TRANSPOSE,alpha,reservoir%cooA,reservoir%descrA,x,beta,y)
+
+       temp = matmul(reservoir%win,input(:,i))
+
+       x_ = tanh(y+temp)
+       x = (1-reservoir%leakage_slab)*x + reservoir%leakage_slab*x_
+
+       x_augment = x
+       x_augment(2:reservoir%n:2) = x_augment(2:reservoir%n:2)**2
+
+       prediction(:,i+1) = matmul(reservoir%wout,x_augment)
+    enddo
+
+    if(reservoir%ohtc_prediction) then
+      num_vars = 2
+    else
+      num_vars = 1
+    endif
+
+    allocate(grid4d_truth(num_vars,grid%resxchunk,grid%resychunk,length))
+
+    allocate(grid4d_prediction(num_vars,grid%resxchunk,grid%resychunk,length))
+
+    allocate(grid4d_difference(num_vars,grid%resxchunk,grid%resychunk,length))
+
+    do i=1,length
+       call tile_3d_state_vec_res1d_ocean(model_parameters,reservoir%assigned_region,targetdata(:,i),grid4d_truth(:,:,:,i))
+       call tile_3d_state_vec_res1d_ocean(model_parameters,reservoir%assigned_region,prediction(:,i),grid4d_prediction(:,:,:,i))
+    enddo
+
+   !if(reservoir%assigned_region==1) then
+    !print *,'target data ',targetdata
+    !print *,'prediction data ',prediction
+   !endif
+
+    do i=1,length
+       call unstandardize_data_2d(grid4d_truth(1,:,:,i),grid%mean(grid%sst_mean_std_idx),grid%std(grid%sst_mean_std_idx))
+       call unstandardize_data_2d(grid4d_prediction(1,:,:,i),grid%mean(grid%sst_mean_std_idx),grid%std(grid%sst_mean_std_idx))
+       if(reservoir%ohtc_prediction) then
+         call unstandardize_data_2d(grid4d_truth(2,:,:,i),grid%mean(grid%ohtc_mean_std_idx),grid%std(grid%ohtc_mean_std_idx))
+         call unstandardize_data_2d(grid4d_prediction(2,:,:,i),grid%mean(grid%ohtc_mean_std_idx),grid%std(grid%ohtc_mean_std_idx))
+       endif
+    enddo
+
+    if(reservoir%assigned_region==578) then
+      print *, 'mod_slab.unnoisysync_error. grid%mean(grid%sst_mean_std_idx), grid%std(grid%sst_mean_std_idx) ', grid%mean(grid%sst_mean_std_idx), grid%std(grid%sst_mean_std_idx)
+      print *, 'mod_slab.unnoisysync_error. grid%mean(grid%ohtc_mean_std_idex), grid%std(grid%ohtc_mean_std_idx) ', grid%mean(grid%ohtc_mean_std_idx), grid%std(grid%ohtc_mean_std_idx)
+    endif
+
+    if(reservoir%assigned_region==1) then
+      print *,'target data unstandardized ',targetdata
+      print *,'prediction data unstandardized ',prediction
+    endif
+
+    grid4d_difference = 0.0_dp
+
+    grid4d_difference = grid4d_prediction - grid4d_truth
+    print *, 'Writing data to disk now'
+    print *, 'grid%res_xstart, grid%res_ystart', grid%res_xstart, grid%res_ystart
+    call write_netcdf_parallel_mpi_ocean(model_parameters,grid%res_xstart,grid%res_ystart,1,'vanilla_sync_error_ocean_'//model_parameters%trial_name//'.nc',mpi_res,.True.,grid4d=grid4d_difference)
+    call write_netcdf_parallel_mpi_ocean(model_parameters,grid%res_xstart,grid%res_ystart,1,'vanilla_sync_prediction_ocean_'//model_parameters%trial_name//'.nc',mpi_res,.True.,grid4d=grid4d_prediction)
+    call write_netcdf_parallel_mpi_ocean(model_parameters,grid%res_xstart,grid%res_ystart,1,'vanilla_sync_truth_ocean_'//model_parameters%trial_name//'.nc',mpi_res,.True.,grid4d=grid4d_truth)
+
+end subroutine
 
 subroutine predict_slab(reservoir,model_parameters,grid,x,local_model_in)
     use mpires, only : predictionmpicontroller
@@ -1342,7 +1694,7 @@ subroutine predict_slab_ml(reservoir,model_parameters,grid,x)
     temp = matmul(reservoir%win,reservoir%feedback)
 
     x_ = tanh(y + temp)
-    x = (1-reservoir%leakage)*x + reservoir%leakage*x_
+    x = (1-reservoir%leakage_slab)*x + reservoir%leakage_slab*x_
 
     x_temp = x
     x_temp(2:reservoir%n:2) = x_temp(2:reservoir%n:2)**2
@@ -1351,9 +1703,12 @@ subroutine predict_slab_ml(reservoir,model_parameters,grid,x)
 
     reservoir%outvec = matmul(reservoir%wout,x_augment)
 
-    reservoir%outvec = reservoir%outvec*grid%std(grid%sst_mean_std_idx) + grid%mean(grid%sst_mean_std_idx)
+    reservoir%outvec(1:reservoir%sst_size_res) = reservoir%outvec(1:reservoir%sst_size_res)*grid%std(grid%sst_mean_std_idx) + grid%mean(grid%sst_mean_std_idx)
+    if(reservoir%ohtc_prediction) then
+      reservoir%outvec(reservoir%sst_size_res+1:reservoir%sst_size_res+reservoir%ohtc_res_size) = reservoir%outvec(reservoir%sst_size_res+1:reservoir%sst_size_res+reservoir%ohtc_res_size)*grid%std(grid%ohtc_mean_std_idx) + grid%mean(grid%ohtc_mean_std_idx)
+    endif
 
-    if((reservoir%assigned_region == 954).and.(mod(i,14*24) == 0)) then
+    if((reservoir%assigned_region == 690).and.(mod(i,14*24) == 0)) then
       print *, '*******'
       print *, 'reservoir%predictiondata(grid%sst_start:grid%sst_end,model_parameters%synclength/model_parameters%timestep_slab+10)',reservoir%predictiondata(grid%sst_start:grid%sst_end,model_parameters%synclength/model_parameters%timestep_slab+10)
       print *, 'outvec slab region', reservoir%assigned_region, reservoir%outvec
@@ -1441,7 +1796,8 @@ subroutine chunking_matmul_ml(reservoir,model_parameters,grid,batch_number,train
    reservoir%augmented_states(1:reservoir%n,:) = reservoir%states
 
    call tile_full_input_to_target_data_ocean_model(reservoir,grid,trainingdata(:,model_parameters%discardlength/model_parameters%timestep_slab+(batch_number-1)*m+1:batch_number*m+model_parameters%discardlength/model_parameters%timestep_slab),targetdata)
-
+   print *, 'slab targetdata(:,20) ', targetdata(:,20)
+ 
    allocate(temp(reservoir%chunk_size_prediction,n))
    temp = 0.0_dp
 
@@ -1515,7 +1871,7 @@ subroutine write_controller_file(model_parameters)
 
    character(len=:), allocatable :: file_path
 
-   file_path = '/scratch/user/troyarcomano/ML_SPEEDY_WEIGHTS/'//trim(model_parameters%trial_name)//'_controller_file.txt'
+   file_path = '/scratch/user/dpp94/ML_SPEEDY_WEIGHTS/'//trim(model_parameters%trial_name)//'_controller_file.txt'
  
    open (10, file=file_path, status='unknown')
 
@@ -1540,7 +1896,7 @@ subroutine write_trained_res(reservoir,model_parameters,grid)
   character(len=:), allocatable :: file_path
   character(len=4) :: worker_char
 
-  file_path = '/scratch/user/troyarcomano/ML_SPEEDY_WEIGHTS/'
+  file_path = '/scratch/user/dpp94/ML_SPEEDY_WEIGHTS/'
 
   write(worker_char,'(i0.4)') reservoir%assigned_region
 
@@ -1555,6 +1911,8 @@ subroutine write_trained_res(reservoir,model_parameters,grid)
 
   call write_netcdf_1d_non_met_data_real(grid%mean,'mean',file_path//'worker_'//worker_char//'_ocean_'//trim(model_parameters%trial_name)//'.nc','unitless','mean_x')
   call write_netcdf_1d_non_met_data_real(grid%std,'std',file_path//'worker_'//worker_char//'_ocean_'//trim(model_parameters%trial_name)//'.nc','unitless','std_x')
+
+  call write_netcdf_1d_non_met_data_real(reservoir%leakage_slab,'leakage_slab',file_path//'worker_'//worker_char//'_ocean_'//trim(model_parameters%trial_name)//'.nc','unitless','leakage_slab_x')
 
 end subroutine
 
@@ -1626,22 +1984,28 @@ subroutine trained_ocean_reservoir_prediction(reservoir,model_parameters,grid,re
 
      grid%sst_mean_std_idx = grid_atmo%sst_mean_std_idx
 
-     allocate(reservoir%atmo_training_data_idx(sst_res_input_size))
+     if(reservoir%ohtc_prediction) then
+       allocate(reservoir%atmo_training_data_idx(sst_res_input_size - grid_atmo%inputxchunk*grid_atmo%inputychunk))
+     else
+       allocate(reservoir%atmo_training_data_idx(sst_res_input_size))
+     endif
+
      counter = 0
      do i=grid_atmo%atmo3d_end-grid_atmo%inputxchunk*grid_atmo%inputychunk*reservoir_atmo%local_predictvars+1,grid_atmo%logp_end
         counter = counter + 1
         reservoir%atmo_training_data_idx(counter) = i
      enddo
+     print *, 'grid_atmo%logp_start, grid_atmo%logp_end ', grid_atmo%logp_start, grid_atmo%logp_end
 
      !NOTE the averaging used to do everything during prediction
-     !do i=grid_atmo%sst_start,grid_atmo%sst_end
-     !   counter = counter + 1
-     !   reservoir%atmo_training_data_idx(counter) = i
-     !enddo
-     !do i=grid_atmo%tisr_start,grid_atmo%tisr_end
-     !   counter = counter + 1
-     !   reservoir%atmo_training_data_idx(counter) = i
-     !enddo
+     do i=grid_atmo%sst_start,grid_atmo%sst_end
+        counter = counter + 1
+        reservoir%atmo_training_data_idx(counter) = i
+     enddo
+     do i=grid_atmo%tisr_start,grid_atmo%tisr_end
+        counter = counter + 1
+        reservoir%atmo_training_data_idx(counter) = i
+     enddo
  
      if(reservoir%ohtc_prediction) grid%ohtc_mean_std_idx = 1
 
@@ -1678,7 +2042,7 @@ subroutine read_ohtc_parallel_training(reservoir,model_parameters,grid,ohtc_var,
 
    call get_current_time_delta_hour(ohtc_calendar,0)
 
-   call get_current_time_delta_hour(calendar,model_parameters%traininglength+model_parameters%synclength)
+   call get_current_time_delta_hour(calendar,0) !model_parameters%traininglength+model_parameters%synclength)
 
    call time_delta_between_two_dates_datetime_type(ohtc_calendar,calendar,start_index) 
 
@@ -1693,7 +2057,7 @@ subroutine read_ohtc_parallel_training(reservoir,model_parameters,grid,ohtc_var,
    where(abs(ohtc_var) > 10.0**13)
      ohtc_var = 0.0_dp
    end where
-
+ 
 end subroutine 
 
 subroutine read_ohtc_parallel_prediction(reservoir,model_parameters,grid,ohtc_var,start_idx,length)
@@ -1735,6 +2099,7 @@ subroutine read_ohtc_parallel_prediction(reservoir,model_parameters,grid,ohtc_va
       end_index = model_parameters%synclength+100
    endif
 
+   !print *, 'mod_slab/read_ohtc_parallel_prediction. start_index ', start_index
    call read_3d_file_parallel(ohtc_file,'sohtc300',mpi_res,grid,ohtc_var,start_index,1,end_index)
  
    where(abs(ohtc_var) > 10.0**13)
